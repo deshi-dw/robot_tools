@@ -1,0 +1,55 @@
+NAME 			= libinpt
+VERSION_MAJOR 	= 0
+VERSION_MINOR 	= 1
+OUTPUT			= DEBUG
+CC 				= clang
+
+ARG				= -Wall -pedantic -std=c11 -shared -target x86_64-pc-windows-gnu
+DEF				= -DDLL_EXPORT
+
+INC_P		   += -Iinclude
+# INC_P		   += -IC:\msys64\mingw64\include
+# INC_P		   += -IC:\msys64\mingw64\include\SDL
+# INC_P		   += -IC:\msys64\mingw64\include\freetype2
+# INC_P		   += -IC:\msys64\mingw64\include\libpng16
+
+LIB_P			= -Llib
+#LIB_P		   += -LC:\winbuilds\lib64
+#LIB_P		   += -LC:\winbuilds\bin
+
+ifeq ($(OUTPUT), DEBUG)
+	ARG += -g -ggdb -O0
+endif
+
+INC				= $(wildcard include/*.h)
+SRC				= $(wildcard     src/*.c)
+LIB				= 	-lsetupapi						\
+					-lhid							\
+					-lhidparse						\
+					-lcfgmgr32
+
+OBJ			   := $(patsubst src/%.c, obj/%.o, $(SRC))
+
+TEST			= $(wildcard     test/*.c)
+TEST_EXE	   := $(patsubst test/%.c, %.exe, $(TEST))
+
+
+ALL: $(NAME) $(TEST_EXE)
+
+#	powershell -c '"[$(cat .\obj\*.json)]" > compile_commands.json'
+$(NAME) : $(OBJ)
+	-mkdir bin
+	powershell -c 'cp lib/*.dll bin'
+	$(CC) $(ARG) $(DEF) $(INC_P) $(OBJ) $(LIB_P) $(LIB) -o bin/$(NAME).dll
+
+$(TEST_EXE) : $(TEST)
+	$(CC) -Wall -pedantic -std=c11 $(INC_P) $(LIB_P) -Lbin $(LIB) -linpt $< -o bin/$@
+
+$(OBJ) : $(SRC)
+	-mkdir obj
+	$(CC) $(ARG) $(DEF) -DINPT_VERSION_MAJOR=$(VERSION_MAJOR) -DINPT_VERSION_MINOR=$(VERSION_MINOR) $(INC_P) -c $< -o $@
+
+.PHONY: clean
+
+clean:
+	powershell -c 'rm obj/*.o; rm bin/*'

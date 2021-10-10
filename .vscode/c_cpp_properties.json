@@ -1,0 +1,33 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "compilerPath": "C:/Program Files/LLVM/bin/clang.exe",
+            "cStandard": "c11",
+            "cppStandard": "gnu++98",
+            "intelliSenseMode": "windows-clang-x64",
+            "compilerArgs": [
+                "-Wall",
+                "-v",
+                "-target x86_64-pc-windows-gnu",
+                "-shared",
+                "-DDLL_EXPORT",
+                "-g",
+                "-ggdb",
+                "-O0",
+                "-Iinclude",
+                "-Llib",
+                "-Lbin"
+            ]
+        }
+    ],
+    "version": 4
+}
