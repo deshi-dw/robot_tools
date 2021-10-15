@@ -1,4 +1,6 @@
 #include "inpt.h"
+
+#include "debug.h"
 #include "rhid.h"
 
 #include <stdint.h>
@@ -22,6 +24,12 @@ static unsigned long inpt_hash(char* str) {
 }
 
 LIBINPT const char* inpt_version() {
+	// C macros are dumb so macros are stringified before they are evaulated.
+	// To solve this, you can use another macro function to stringify and then
+	// concatinate.
+	// This turns "INPT_VERSION_MAJOR" "."  "INPT_VERSION_MINOR"
+	// into "0" "." "1" or whatever the numbers are.
+	// That is why all this garbadge is here.
 #define STREXPAND(x) #x
 #define VER(major, minor) STREXPAND(major) "." STREXPAND(minor)
 
@@ -38,65 +46,173 @@ LIBINPT const char* inpt_version() {
 }
 
 LIBINPT int inpt_start() {
+	inpt.is_running = 1;
+
+	while(inpt.is_running) {
+		inpt_update();
+	}
+
 	return 0;
 }
 
 LIBINPT int inpt_stop() {
+	inpt.is_running = 0;
+
 	return 0;
 }
 
 // TODO Thread the program and then unthread it.
 LIBINPT int inpt_update() {
-	for(int i = 0; i < ACTION_COUNT; i++) {
-		inpt_act_t* action = inpt.actions[i];
+	// Update device list.
+	// TODO Since this might be expensive, consider doing ever x number of
+	// updates instead.
+	//		Better yet, do it on a timer.
 
-		// Check to see if the action can run in the current state.
-		if(action == NULL || ! (BITFLD_GET(action->states, inpt.state_index))) {
-			continue;
+	// FIXME To continue the above TODO, doing rhid_get_devices will overwrite
+	// the previous devices.
+	//		 this causes any opened devices to become closed again. (NOT GOOD.)
+
+	if(inpt.dev_selected == NULL) {
+		inpt.dev_count = rhid_get_device_count();
+		if(inpt.dev_count >= MAX_DEV_COUNT) {
+			// TODO Consider erroring out here.
+			inpt.dev_count = MAX_DEV_COUNT;
 		}
 
-		// TODO Refactor.
+		// TODO do a proper fix. but for now have this fix. What puts a wrench
+		// in doing a better fix immediatly
+		//		is rhid's incapability to do disconnection detection... so...
+		// implement that please.
 
-		// Don't proccess actions that have an input mod but it isn't pressed.
-		if(action->input_mod != -1 && inpt.hid.btns[action->input_mod] == 0) {
-			continue;
+		// FIXME Calling rhid_get_devices causes massive slowdown every so often
+		// (I THINK). Probably do
+		//		 to accessing various database-like structures in order to
+		// generate all the info needed. 		 None-the-less, move
+		// rhid_get_devices out of the update cycle, don't just reduce the
+		// amount of times it is called because even if it is only called a
+		// couple of times, it could 		 still freeze the update cycle. This
+		// goes
+		// back to needing a proper way to detect when a 		 is removed.
+
+		// TEMP FIX:
+		rhid_device_t tmp_devs[MAX_DEV_COUNT];
+		rhid_get_devices(tmp_devs, inpt.dev_count);
+		for(int i = 0; i < inpt.dev_count; i++) {
+			if(inpt.devs[i].is_open) {
+				continue;
+			}
+
+			inpt.devs[i] = tmp_devs[i];
+
+			inpt.dev_names[i] = rhid_get_product_name(&inpt.devs[i]);
 		}
+	}
 
-		switch(action->type) {
-			case 0: // STATE CHANGE
-				if(inpt.hid.btns[action->input] != 1) {
-					break;
+	// Update HID values.
+	if(inpt.dev_selected != NULL) {
+		DEBUG_TIME2("updating HID values", {
+			DEBUG_TIME2("HID report", {
+				rhid_report_buttons(inpt.dev_selected, 0);
+				rhid_report_values(inpt.dev_selected, 0);
+			});
+
+			DEBUG_TIME2("state copy", {
+				rhid_get_buttons_state(inpt.dev_selected, inpt.hid.btns,
+									   inpt.hid.btn_count);
+				rhid_get_values_state(inpt.dev_selected, inpt.hid.vals,
+									  inpt.hid.val_count);
+			});
+			for(int i = 0; i < inpt.hid.btn_count; i++) {
+				if(inpt.hid.btns[i] == inpt.hid_prev.btns[i]) {
+					continue;
 				}
 
-				// Get the new state index as we switch states.
-				for(int i = 0; i < STATE_COUNT; i++) {
-					if(inpt.states[i] != action->new_state) {
+				// TODO Do on button update / change / trigger or whatever.
+
+				for(int j = 0; j < MAX_HID_BTN_EVENTS; j++) {
+					if(inpt.on_hid_btns[j] == NULL) {
 						continue;
 					}
 
-					// TODO I doubt this is nessesary but it would probably be
-					// more correct to queue the change in state so other
-					// actions in the array aren't affected
-					// until next cycle.
-					inpt.state_index = i;
-					break;
+					inpt.on_hid_btns[j](i, inpt.hid.btns[i]);
+				}
+			}
+
+			for(int i = 0; i < inpt.hid.val_count; i++) {
+				if(inpt.hid.vals[i] == inpt.hid_prev.vals[i]) {
+					continue;
 				}
 
-				break;
+				// TODO Do on value update.
+				for(int j = 0; j < MAX_HID_VAL_EVENTS; j++) {
+					if(inpt.on_hid_vals[j] == NULL) {
+						continue;
+					}
 
-			case 1: // TRIGGER
-				if(inpt.hid.btns[action->input] != 1) {
-					break;
+					inpt.on_hid_vals[j](i, inpt.hid.vals[i]);
 				}
+			}
 
-				// TODO Call the trigger action.
-				break;
-
-			case 2: // VALUE
-				// TODO Call the value.
-				break;
-		}
+			memcpy(&inpt.hid_prev, &inpt.hid, sizeof(inpt_hid_t));
+		});
 	}
+
+	// Update actions.
+	DEBUG_TIME2("updating actions", {
+		for(int i = 0; i < ACTION_COUNT; i++) {
+			inpt_act_t* action = inpt.actions[i];
+
+			// Check to see if the action can run in the current state.
+			if(action == NULL ||
+			   ! (BITFLD_GET(action->states, inpt.state_index))) {
+				continue;
+			}
+
+			// TODO Refactor.
+
+			// Don't proccess actions that have an input mod but it isn't
+			// pressed.
+			if(action->input_mod != -1 &&
+			   inpt.hid.btns[action->input_mod] == 0) {
+				continue;
+			}
+
+			switch(action->type) {
+				case 0: // STATE CHANGE
+					if(inpt.hid.btns[action->input] != 1) {
+						break;
+					}
+
+					// Get the new state index as we switch states.
+					for(int i = 0; i < STATE_COUNT; i++) {
+						if(inpt.states[i] != action->new_state) {
+							continue;
+						}
+
+						// TODO I doubt this is nessesary but it would probably
+						// be more correct to queue the change in state so other
+						// actions in the array aren't affected
+						// until next cycle.
+						inpt.state_index = i;
+						break;
+					}
+
+					break;
+
+				case 1: // TRIGGER
+					if(inpt.hid.btns[action->input] != 1) {
+						break;
+					}
+
+					// TODO Call the trigger action.
+					break;
+
+				case 2: // VALUE
+					// TODO Call the value.
+					break;
+			}
+		}
+	});
 
 	return 0;
 }
@@ -325,7 +441,7 @@ LIBINPT int inpt_act_del_state(inpt_act_t* action, char* state) {
 
 	// If state is one of all of the Alls, set everything to zero.
 	// See, we are being clever because all is usually used to allow everthing
-	// but if you delete all you have nothing.
+	// but if you delete all you have nothing. It isn't that clever actually...
 	if(hash == inpt_hash("all") || hash == inpt_hash("ALL")) {
 		memset(action->states, 0, sizeof(action->states));
 
@@ -368,22 +484,69 @@ LIBINPT int inpt_act_on_value(inpt_act_t* action, void (*event)(int amount)) {
 // TODO Copy rhid_win.c and rhid.h from the big computer to the little computer
 // so I can implement these functions.
 LIBINPT int inpt_hid_count() {
-	return 0;
+	return inpt.dev_count;
 }
-LIBINPT int inpt_hid_list(char** names) {
-	return 0;
+LIBINPT char** inpt_hid_list() {
+	// FIXME This will return a list of null pointers if inpt_update hasn't been
+	// called yet.
+	return (char**) inpt.dev_names;
 }
+
 LIBINPT int inpt_hid_select(int index) {
+	if(index >= inpt.dev_count) {
+		return -1;
+	}
+
+	if(inpt.dev_selected != NULL) {
+		rhid_close(inpt.dev_selected);
+	}
+
+	inpt.dev_selected = &inpt.devs[index];
+	rhid_open(inpt.dev_selected);
+
+	inpt.hid.btn_count = rhid_get_button_count(inpt.dev_selected);
+	inpt.hid.val_count = rhid_get_value_count(inpt.dev_selected);
+
+	// Make hid_prev the same as the hid so we can do comparisons latter.
+	memcpy(&inpt.hid_prev, &inpt.hid, sizeof(inpt_hid_t));
+
 	return 0;
 }
 
 LIBINPT int inpt_hid_is_conn() {
+	// TODO Find a better way to do connection check. This is prone to fail if
+	//		the device list isn't updated every time inpt_update is called.
+	//		(which it shouldn't be.)
+	for(int i = 0; i < inpt.dev_count; i++) {
+		if(&inpt.devs[i] == inpt.dev_selected) {
+			return 1;
+		}
+	}
+
 	return 0;
 }
 
-LIBINPT int inpt_hid_on_btn(void (*event)(int idx, int flags)) {
-	return 0;
+LIBINPT int inpt_hid_on_btn(inpt_hid_btn_evnt_t event) {
+	for(int i = 0; i < MAX_HID_BTN_EVENTS; i++) {
+		if(inpt.on_hid_btns[i] != NULL) {
+			continue;
+		}
+
+		inpt.on_hid_btns[i] = event;
+		return 0;
+	}
+
+	return -1;
 }
-LIBINPT int inpt_hid_on_val(void (*event)(int idx, int amount)) {
-	return 0;
+LIBINPT int inpt_hid_on_val(inpt_hid_val_evnt_t event) {
+	for(int i = 0; i < MAX_HID_VAL_EVENTS; i++) {
+		if(inpt.on_hid_vals[i] != NULL) {
+			continue;
+		}
+
+		inpt.on_hid_vals[i] = event;
+		return 0;
+	}
+
+	return -1;
 }

@@ -10,9 +10,13 @@
 #endif
 
 #include <stdint.h>
+#include <rhid.h>
 
 typedef struct inpt_act_t inpt_act_t;
 typedef struct inpt_hid_t inpt_hid_t;
+
+typedef void (*inpt_hid_btn_evnt_t)(int idx, int flags);
+typedef void (*inpt_hid_val_evnt_t)(int idx, int amount);
 
 #define BITFLD_GET(bitfield, i) bitfield[i / 8] & (1 << i % 8)
 #define BITFLD_SET(bitfield, i) bitfield[i / 8] |= (1 << i % 8)
@@ -23,8 +27,8 @@ struct inpt_hid_t {
 	int btn_count;
 	int val_count;
 
-#define MAX_BUTTONS 32
-#define MAX_VALUES 16
+#define MAX_BUTTONS 48
+#define MAX_VALUES 32
 
 	uint8_t	 btns[MAX_BUTTONS];
 	uint32_t vals[MAX_VALUES];
@@ -53,6 +57,20 @@ struct inpt_t {
 	int state_index;
 
 	inpt_hid_t hid;
+	inpt_hid_t hid_prev;
+
+#define MAX_HID_BTN_EVENTS 32
+	inpt_hid_btn_evnt_t on_hid_btns[MAX_HID_BTN_EVENTS];
+#define MAX_HID_VAL_EVENTS 32
+	inpt_hid_btn_evnt_t on_hid_vals[MAX_HID_VAL_EVENTS];
+
+	int dev_count;
+
+#define MAX_DEV_COUNT 16
+	rhid_device_t devs[MAX_DEV_COUNT];
+	const char* dev_names[MAX_DEV_COUNT];
+
+	rhid_device_t* dev_selected;
 };
 
 struct inpt_act_t {
@@ -118,12 +136,12 @@ LIBINPT int inpt_act_on_trigger(inpt_act_t* action, void (*event)());
 LIBINPT int inpt_act_on_value(inpt_act_t* action, void (*event)(int amount));
 
 LIBINPT int inpt_hid_count();
-LIBINPT int inpt_hid_list(char** names);
+LIBINPT char** inpt_hid_list();
 LIBINPT int inpt_hid_select(int index);
 
 LIBINPT int inpt_hid_is_conn();
 
-LIBINPT int inpt_hid_on_btn(void (*event)(int idx, int flags));
-LIBINPT int inpt_hid_on_val(void (*event)(int idx, int amount));
+LIBINPT int inpt_hid_on_btn(inpt_hid_btn_evnt_t event);
+LIBINPT int inpt_hid_on_val(inpt_hid_val_evnt_t event);
 
 #endif

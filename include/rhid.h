@@ -139,6 +139,7 @@ enum RHID_BUTTON_STATE {
 	RHID_BUTTON_RELEASED = 3
 };
 
+// TODO Reduce rhid_device_t size.
 typedef struct {
 	int is_open;
 

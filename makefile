@@ -12,7 +12,8 @@ LIBS			= 	-lm -lpthread					\
 					-lcfgmgr32
 
 ifeq ($(OUTPUT), DEBUG)
-	CFLAGS += -g -ggdb -O0
+	CFLAGS += -g -O0
+#	CFLAGS += -DRHID_DEBUG_ENABLED
 endif
 
 SRC			   := $(wildcard src/*.c)
@@ -20,9 +21,11 @@ OBJ			   := $(patsubst src/%.c,obj/%.o,$(SRC))
 
 .PHONY: clean
 
-ALL: $(NAME)
+$(NAME): $(NAME)
 
 include test/test.mk
+
+all: $(NAME) test
 
 $(NAME): $(OBJ)
 	$(CC) $(CFLAGS) $(OBJ) $(LIBS) -o bin/$(NAME).dll

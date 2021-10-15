@@ -1,3 +1,4 @@
+#include "debug.h"
 #include "rhid.h"
 
 #include <stdint.h>
@@ -6,12 +7,15 @@
 #include <string.h>
 
 #include <windows.h>
-#include <SetupAPI.h>
 #include <hidsdi.h>
 #include <hidpi.h>
+#include <SetupAPI.h>
 
+// TODO Handle HID disconnection gracefully.
+// TODO Rename size to count in places where it refers to an array size to avoid
+// confusion.
 
-typedef unsigned long ulong;
+typedef unsigned long  ulong;
 typedef unsigned short ushort;
 
 #define ERROR_TO_STRING_CASE(char_msg, err) \
@@ -51,15 +55,15 @@ static struct {
 	ulong dev_iface_list_size;
 	char* dev_iface_list;
 
-	int button_caps_count;
+	int				  button_caps_count;
 	HIDP_BUTTON_CAPS* button_caps;
 
-	int value_caps_count;
+	int				 value_caps_count;
 	HIDP_VALUE_CAPS* value_caps;
 
-	ulong usages_pages_count;
+	ulong			usages_pages_count;
 	USAGE_AND_PAGE* usages_pages;
-	USAGE* usages_ordered;
+	USAGE*			usages_ordered;
 } _rhid_win_gcache = {0};
 
 // @todo: rhid_get_device_count can be optimized.
@@ -88,11 +92,11 @@ int rhid_get_device_count() {
 
 	// jump through the enumeration until we get out of bounds.
 	const int jump_count = 5;
-	int last_index = 0;
+	int		  last_index = 0;
 
 	for(int i = jump_count;; i += jump_count) {
 		SP_DEVICE_INTERFACE_DATA iface = {0};
-		iface.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+		iface.cbSize				   = sizeof(SP_DEVICE_INTERFACE_DATA);
 		if(SetupDiEnumDeviceInterfaces(dev_list, NULL, &hid_guid, i, &iface) ==
 		   FALSE) {
 			if(GetLastError() == ERROR_NO_MORE_ITEMS) {
@@ -117,7 +121,7 @@ int rhid_get_device_count() {
 	// back-track to the last valid index which will be the final size.
 	for(last_index = last_index; last_index >= 0; last_index--) {
 		SP_DEVICE_INTERFACE_DATA iface = {0};
-		iface.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+		iface.cbSize				   = sizeof(SP_DEVICE_INTERFACE_DATA);
 		if(SetupDiEnumDeviceInterfaces(dev_list, NULL, &hid_guid, last_index,
 									   &iface) == TRUE) {
 			break;
@@ -132,8 +136,8 @@ int rhid_get_device_count() {
 }
 
 static inline void* _rhid_open_device_handle(const char* path,
-											 ulong access_rights,
-											 ulong share_mode) {
+											 ulong		 access_rights,
+											 ulong		 share_mode) {
 	void* handle = CreateFileA(path, access_rights, share_mode, NULL,
 							   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if(handle == INVALID_HANDLE_VALUE) {
@@ -170,7 +174,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 
 		// get the next interface at index i.
 		SP_DEVICE_INTERFACE_DATA iface = {0};
-		iface.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+		iface.cbSize				   = sizeof(SP_DEVICE_INTERFACE_DATA);
 
 		if(SetupDiEnumDeviceInterfaces(dev_list, NULL, &hid_guid, i, &iface) ==
 		   FALSE) {
@@ -252,9 +256,9 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		// get general attributes of the device.
 		HIDD_ATTRIBUTES attributes = {0};
 		if(HidD_GetAttributes(devices[i].handle, &attributes) == TRUE) {
-			devices[i].vendor_id = attributes.VendorID;
+			devices[i].vendor_id  = attributes.VendorID;
 			devices[i].product_id = attributes.ProductID;
-			devices[i].version = attributes.VersionNumber;
+			devices[i].version	  = attributes.VersionNumber;
 		}
 #ifdef RHID_DEBUG_ENABLED
 		else {
@@ -281,7 +285,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 
 		// @todo: think about moving product_name to global cache.
 		// this would be for the same reason as manufacturer_name.
-		
+
 		// get the product name of the device.
 		wchar_t product_name[127];
 		if(HidD_GetProductString(devices[i].handle, product_name,
@@ -347,7 +351,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 					dev_caps.NumberInputButtonCaps;
 			}
 			HIDP_BUTTON_CAPS* button_caps = _rhid_win_gcache.button_caps;
-			devices[i].cap_button_count = dev_caps.NumberInputButtonCaps;
+			devices[i].cap_button_count	  = dev_caps.NumberInputButtonCaps;
 			{
 				ulong ret = HidP_GetButtonCaps(
 					HidP_Input, button_caps,
@@ -402,7 +406,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 			}
 
 			HIDP_VALUE_CAPS* value_caps = _rhid_win_gcache.value_caps;
-			devices[i].cap_value_count = dev_caps.NumberInputValueCaps;
+			devices[i].cap_value_count	= dev_caps.NumberInputValueCaps;
 			{
 				ulong ret = HidP_GetValueCaps(
 					HidP_Input, value_caps,
@@ -449,7 +453,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		}
 
 		devices[i].usage_page = dev_caps.UsagePage;
-		devices[i].usage = dev_caps.Usage;
+		devices[i].usage	  = dev_caps.Usage;
 
 		// devices[i].cap_button_count = dev_caps.NumberInputButtonCaps;
 		// devices[i].cap_value_count = dev_caps.NumberInputValueCaps;
@@ -539,10 +543,10 @@ int rhid_open(rhid_device_t* device) {
 	}
 
 	device->_preparsed = preparsed;
-	device->report = malloc(device->report_size);
+	device->report	   = malloc(device->report_size);
 
 	device->buttons = calloc(device->button_count, sizeof(uint8_t));
-	device->values = calloc(device->value_count, sizeof(uint32_t));
+	device->values	= calloc(device->value_count, sizeof(uint32_t));
 
 	device->is_open = 1;
 
@@ -592,7 +596,15 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 		return -1;
 	}
 
-	// get raw data from the device.
+// get raw data from the device.
+#ifdef RHID_DEBUG_ENABLED
+	// TODO Implement this macro along with DEBUG_TIME_END to support having
+	// macros within the timed code block.
+	//		DEBUG_TIME2 doesn't work because there is a #ifdef
+	//RHID_DEBUG_ENABLED in the code block making it undefined behaviour.s
+
+	// DEBUG_TIME_START("rhid 'get raw data from device'");
+#endif
 	device->report[0] = report_id;
 	if(HidD_GetInputReport(device->handle, device->report,
 						   (u_long) device->report_size) == FALSE) {
@@ -602,6 +614,9 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 #endif
 		return -1;
 	}
+#ifdef RHID_DEBUG_ENABLED
+	// DEBUG_TIME_END();
+#endif
 
 	// parse report into actives buttons list.
 	if(_rhid_win_gcache.usages_pages_count < device->button_count) {
@@ -627,7 +642,7 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 		_rhid_win_gcache.usages_pages_count = device->button_count;
 	}
 
-	ulong active_count = device->button_count;
+	ulong			active_count = device->button_count;
 	USAGE_AND_PAGE* usages_pages = _rhid_win_gcache.usages_pages;
 	{
 		ulong ret = HidP_GetUsagesEx(HidP_Input, 0, usages_pages, &active_count,
@@ -711,9 +726,21 @@ int rhid_report_values(rhid_device_t* device, uint8_t report_id) {
 }
 
 int rhid_get_buttons_state(rhid_device_t* device, uint8_t* buttons, int size) {
+	if(size < device->button_count) {
+		return -1;
+	}
+
+	memcpy(buttons, device->buttons, device->button_count);
+
 	return 0;
 }
 int rhid_get_values_state(rhid_device_t* device, uint32_t* values, int size) {
+	if(size < device->value_count) {
+		return -1;
+	}
+
+	memcpy(values, device->buttons, device->value_count * sizeof(uint32_t));
+
 	return 0;
 }
 
