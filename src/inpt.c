@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // TODO Test all these fffffffuuuuuuuunctions.
 
@@ -110,109 +111,111 @@ LIBINPT int inpt_update() {
 
 	// Update HID values.
 	if(inpt.dev_selected != NULL) {
-		DEBUG_TIME2("updating HID values", {
-			DEBUG_TIME2("HID report", {
-				rhid_report_buttons(inpt.dev_selected, 0);
-				rhid_report_values(inpt.dev_selected, 0);
-			});
+		DEBUG_TIME_START("updating HID values");
+		DEBUG_TIME_START("HID report");
+		rhid_report_buttons(inpt.dev_selected, 0);
+		// FIXME If there is not a slight delay here, the application will
+		// 		 freeze up for 5 seconds, seemingly with no decernable reason.
+		usleep(1000 * 1);
+		rhid_report_values(inpt.dev_selected, 0);
+		DEBUG_TIME_STOP();
 
-			DEBUG_TIME2("state copy", {
-				rhid_get_buttons_state(inpt.dev_selected, inpt.hid.btns,
-									   inpt.hid.btn_count);
-				rhid_get_values_state(inpt.dev_selected, inpt.hid.vals,
-									  inpt.hid.val_count);
-			});
-			for(int i = 0; i < inpt.hid.btn_count; i++) {
-				if(inpt.hid.btns[i] == inpt.hid_prev.btns[i]) {
+		DEBUG_TIME_START("state copy");
+		rhid_get_buttons_state(inpt.dev_selected, inpt.hid.btns,
+							   inpt.hid.btn_count);
+		rhid_get_values_state(inpt.dev_selected, inpt.hid.vals,
+							  inpt.hid.val_count);
+		DEBUG_TIME_STOP();
+		for(int i = 0; i < inpt.hid.btn_count; i++) {
+			if(inpt.hid.btns[i] == inpt.hid_prev.btns[i]) {
+				continue;
+			}
+
+			// TODO Do on button update / change / trigger or whatever.
+
+			for(int j = 0; j < MAX_HID_BTN_EVENTS; j++) {
+				if(inpt.on_hid_btns[j] == NULL) {
 					continue;
 				}
 
-				// TODO Do on button update / change / trigger or whatever.
+				inpt.on_hid_btns[j](i, inpt.hid.btns[i]);
+			}
+		}
 
-				for(int j = 0; j < MAX_HID_BTN_EVENTS; j++) {
-					if(inpt.on_hid_btns[j] == NULL) {
-						continue;
-					}
-
-					inpt.on_hid_btns[j](i, inpt.hid.btns[i]);
-				}
+		for(int i = 0; i < inpt.hid.val_count; i++) {
+			if(inpt.hid.vals[i] == inpt.hid_prev.vals[i]) {
+				continue;
 			}
 
-			for(int i = 0; i < inpt.hid.val_count; i++) {
-				if(inpt.hid.vals[i] == inpt.hid_prev.vals[i]) {
+			// TODO Do on value update.
+			for(int j = 0; j < MAX_HID_VAL_EVENTS; j++) {
+				if(inpt.on_hid_vals[j] == NULL) {
 					continue;
 				}
 
-				// TODO Do on value update.
-				for(int j = 0; j < MAX_HID_VAL_EVENTS; j++) {
-					if(inpt.on_hid_vals[j] == NULL) {
-						continue;
-					}
-
-					inpt.on_hid_vals[j](i, inpt.hid.vals[i]);
-				}
+				inpt.on_hid_vals[j](i, inpt.hid.vals[i]);
 			}
+		}
 
-			memcpy(&inpt.hid_prev, &inpt.hid, sizeof(inpt_hid_t));
-		});
+		memcpy(&inpt.hid_prev, &inpt.hid, sizeof(inpt_hid_t));
+		DEBUG_TIME_STOP();
 	}
 
 	// Update actions.
-	DEBUG_TIME2("updating actions", {
-		for(int i = 0; i < ACTION_COUNT; i++) {
-			inpt_act_t* action = inpt.actions[i];
+	DEBUG_TIME_START("updating actions");
 
-			// Check to see if the action can run in the current state.
-			if(action == NULL ||
-			   ! (BITFLD_GET(action->states, inpt.state_index))) {
-				continue;
-			}
+	for(int i = 0; i < ACTION_COUNT; i++) {
+		inpt_act_t* action = inpt.actions[i];
 
-			// TODO Refactor.
-
-			// Don't proccess actions that have an input mod but it isn't
-			// pressed.
-			if(action->input_mod != -1 &&
-			   inpt.hid.btns[action->input_mod] == 0) {
-				continue;
-			}
-
-			switch(action->type) {
-				case 0: // STATE CHANGE
-					if(inpt.hid.btns[action->input] != 1) {
-						break;
-					}
-
-					// Get the new state index as we switch states.
-					for(int i = 0; i < STATE_COUNT; i++) {
-						if(inpt.states[i] != action->new_state) {
-							continue;
-						}
-
-						// TODO I doubt this is nessesary but it would probably
-						// be more correct to queue the change in state so other
-						// actions in the array aren't affected
-						// until next cycle.
-						inpt.state_index = i;
-						break;
-					}
-
-					break;
-
-				case 1: // TRIGGER
-					if(inpt.hid.btns[action->input] != 1) {
-						break;
-					}
-
-					// TODO Call the trigger action.
-					break;
-
-				case 2: // VALUE
-					// TODO Call the value.
-					break;
-			}
+		// Check to see if the action can run in the current state.
+		if(action == NULL || ! (BITFLD_GET(action->states, inpt.state_index))) {
+			continue;
 		}
-	});
+
+		// TODO Refactor.
+
+		// Don't proccess actions that have an input mod but it isn't
+		// pressed.
+		if(action->input_mod != -1 && inpt.hid.btns[action->input_mod] == 0) {
+			continue;
+		}
+
+		switch(action->type) {
+			case 0: // STATE CHANGE
+				if(inpt.hid.btns[action->input] != 1) {
+					break;
+				}
+
+				// Get the new state index as we switch states.
+				for(int i = 0; i < STATE_COUNT; i++) {
+					if(inpt.states[i] != action->new_state) {
+						continue;
+					}
+
+					// TODO I doubt this is nessesary but it would probably
+					// be more correct to queue the change in state so other
+					// actions in the array aren't affected
+					// until next cycle.
+					inpt.state_index = i;
+					break;
+				}
+
+				break;
+
+			case 1: // TRIGGER
+				if(inpt.hid.btns[action->input] != 1) {
+					break;
+				}
+
+				// TODO Call the trigger action.
+				break;
+
+			case 2: // VALUE
+				// TODO Call the value.
+				break;
+		}
+	}
+	DEBUG_TIME_STOP();
 
 	return 0;
 }

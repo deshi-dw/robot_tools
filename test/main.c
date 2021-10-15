@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-#include "inpt.h"
 #include "debug.h"
+#include "inpt.h"
 
 void on_button(int idx, int flags);
 void on_value(int idx, int amount);
@@ -12,7 +12,11 @@ void on_value(int idx, int amount);
 int main(int arc, char** argv) {
     printf("inpt version %s\n", inpt_version());
 
+    debug.time.last_ms = 1;
+
+    DEBUG_TIME_START("inpt_update");
     inpt_update();
+    DEBUG_TIME_STOP();
 
     // pthread_t inpt_thread = {0};
     // pthread_create(&inpt_thread, NULL, (void*(*)(void*))inpt_start, NULL);
@@ -35,11 +39,14 @@ int main(int arc, char** argv) {
     inpt_hid_on_val(on_value);
 
     while(1) {
-        DEBUG_TIME(inpt_update());
-        if(debug.last_ms > 50.0) {
+        DEBUG_TIME_START("inpt_update");
+        inpt_update();
+        DEBUG_TIME_STOP();
+        if(debug_time_last_ms() > 100.0) {
             exit(0);
         }
-        // usleep(50);
+        puts("\n");
+        // usleep(1 * 1000);
     }
 
     return 0;

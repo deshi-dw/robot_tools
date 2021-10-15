@@ -598,12 +598,7 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 
 // get raw data from the device.
 #ifdef RHID_DEBUG_ENABLED
-	// TODO Implement this macro along with DEBUG_TIME_END to support having
-	// macros within the timed code block.
-	//		DEBUG_TIME2 doesn't work because there is a #ifdef
-	//RHID_DEBUG_ENABLED in the code block making it undefined behaviour.s
-
-	// DEBUG_TIME_START("rhid 'get raw data from device'");
+	DEBUG_TIME_START("rhid 'get raw button data from device'");
 #endif
 	device->report[0] = report_id;
 	if(HidD_GetInputReport(device->handle, device->report,
@@ -615,10 +610,13 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 		return -1;
 	}
 #ifdef RHID_DEBUG_ENABLED
-	// DEBUG_TIME_END();
+	DEBUG_TIME_STOP();
 #endif
 
 	// parse report into actives buttons list.
+#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_START("rhid 'reallocating cache'");
+#endif
 	if(_rhid_win_gcache.usages_pages_count < device->button_count) {
 		if(_rhid_win_gcache.usages_pages == NULL) {
 			_rhid_win_gcache.usages_pages =
@@ -641,6 +639,13 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 
 		_rhid_win_gcache.usages_pages_count = device->button_count;
 	}
+#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_STOP();
+#endif
+
+#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_START("rhid 'parse report into actives buttons list'");
+#endif
 
 	ulong			active_count = device->button_count;
 	USAGE_AND_PAGE* usages_pages = _rhid_win_gcache.usages_pages;
@@ -685,6 +690,10 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 		}
 	}
 
+#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_STOP();
+#endif
+
 	return 0;
 }
 
@@ -697,6 +706,9 @@ int rhid_report_values(rhid_device_t* device, uint8_t report_id) {
 	}
 
 	// get raw data from the device.
+#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_START("rhid 'get raw value data from the device'");
+#endif
 	device->report[0] = report_id;
 	if(HidD_GetInputReport(device->handle, device->report,
 						   (u_long) device->report_size) == FALSE) {
@@ -721,6 +733,9 @@ int rhid_report_values(rhid_device_t* device, uint8_t report_id) {
 			}
 		}
 	}
+#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_STOP();
+#endif
 
 	return 0;
 }

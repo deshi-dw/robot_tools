@@ -7,8 +7,10 @@ LIBS_TEST		= 	-lm -lpthread					\
 					-linpt
 
 SRC			   := $(wildcard test/*.c)
+SRC			   += src/debug.c
 
 .PHONY: test
 
 test:
+	powershell -c 'cp lib/* bin'
 	$(CC) $(CFLAGS_TEST) $(SRC) $(LIBS_TEST) -o bin/test.exe
