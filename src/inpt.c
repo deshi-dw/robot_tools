@@ -62,7 +62,6 @@ LIBINPT int inpt_stop() {
 	return 0;
 }
 
-// TODO Thread the program and then unthread it.
 LIBINPT int inpt_update() {
 	// Update device list.
 	// TODO Since this might be expensive, consider doing ever x number of

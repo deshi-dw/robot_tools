@@ -66,7 +66,7 @@ static struct {
 	USAGE*			usages_ordered;
 } _rhid_win_gcache = {0};
 
-// @todo: rhid_get_device_count can be optimized.
+// TODO rhid_get_device_count can be optimized.
 // to do this, store a pre-allocated buffer for the interface list in a
 // global cache. then, re-allocate it when
 // CM_Get_Device_Interface_List_SizeA is greater than the global cache
@@ -266,7 +266,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		}
 #endif
 
-		// @todo: think about moving manufacturer_name to global cache.
+		// TODO think about moving manufacturer_name to global cache.
 		// this could potentially optimize the allocation and deletion of the
 		// 254 bytes that make up this 2-wide string.
 
@@ -283,7 +283,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		}
 #endif
 
-		// @todo: think about moving product_name to global cache.
+		// TODO think about moving product_name to global cache.
 		// this would be for the same reason as manufacturer_name.
 
 		// get the product name of the device.
