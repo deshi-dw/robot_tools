@@ -40,6 +40,7 @@ const char* debug_time_pop(int level);
 void   debug_time_set_last_ms(double ms);
 double debug_time_last_ms();
 
+#ifdef DEBUG_TIME
 #define DEBUG_PRINT_TIME(msg, time) printf("%s took %d ms\n", msg, time);
 
 #define DEBUG_TIME_START(name) \
@@ -59,5 +60,10 @@ double debug_time_last_ms();
 	debug_time_lvl_prev();                                                  \
 	debug_time_set_last_ms(dbgt_ms);                                        \
 	}
+#else
+#define DEBUG_PRINT_TIME(msg, time)
+#define DEBUG_TIME_START(name)
+#define DEBUG_TIME_STOP()
+#endif
 
 #endif

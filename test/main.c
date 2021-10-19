@@ -1,7 +1,7 @@
 #include <stdio.h>
-#include <unistd.h>
+// #include <unistd.h>
 #include <stdlib.h>
-#include <pthread.h>
+// #include <pthread.h>
 
 #include "debug.h"
 #include "inpt.h"
@@ -33,7 +33,9 @@ int main(int arc, char** argv) {
     gets(cin);
     int selection = atoi(cin);
 
-    inpt_hid_select(selection);
+    if(inpt_hid_select(selection) < 0) {
+        exit(-1);
+    }
 
     inpt_hid_on_btn(on_button);
     inpt_hid_on_val(on_value);
@@ -45,8 +47,7 @@ int main(int arc, char** argv) {
         if(debug_time_last_ms() > 100.0) {
             exit(0);
         }
-        puts("\n");
-        // usleep(1 * 1000);
+        // puts("\n");
     }
 
     return 0;
@@ -57,5 +58,5 @@ void on_button(int idx, int flags) {
 }
 
 void on_value(int idx, int amount) {
-    printf("value[%i] is changed\n", idx);
+    printf("value[%i] set to %d\n", idx, amount);
 }

@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+// #include <unistd.h>
 
 // TODO Test all these fffffffuuuuuuuunctions.
 
@@ -115,7 +115,9 @@ LIBINPT int inpt_update() {
 		rhid_report_buttons(inpt.dev_selected, 0);
 		// FIXME If there is not a slight delay here, the application will
 		// 		 freeze up for 5 seconds, seemingly with no decernable reason.
-		usleep(1000 * 1);
+		//		 this only happens on the laptop. Investigation required.
+
+		// struct timespec delay = {0, ( 1 * 1000 )}; nanosleep(&delay, NULL);
 		rhid_report_values(inpt.dev_selected, 0);
 		DEBUG_TIME_STOP();
 
@@ -504,7 +506,9 @@ LIBINPT int inpt_hid_select(int index) {
 	}
 
 	inpt.dev_selected = &inpt.devs[index];
-	rhid_open(inpt.dev_selected);
+	if(rhid_open(inpt.dev_selected) < 0) {
+		return -1;
+	}
 
 	inpt.hid.btn_count = rhid_get_button_count(inpt.dev_selected);
 	inpt.hid.val_count = rhid_get_value_count(inpt.dev_selected);

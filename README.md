@@ -9,7 +9,9 @@ Of course, the FRC Drive Station will still be required to run the robot but thi
 ## Requirements
 
 - Windows only because of the HID code. This could be solved in the future.
-- Clang compiler for Windows.
+- Windows Driver Kit (https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
+- Clang compiler for Windows (https://github.com/llvm/llvm-project)
+- A mingw toolchain (https://github.com/mstorsjo/llvm-mingw)
 
 ## Status
 
