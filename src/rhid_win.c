@@ -754,7 +754,7 @@ int rhid_get_values_state(rhid_device_t* device, uint32_t* values, int size) {
 		return -1;
 	}
 
-	memcpy(values, device->buttons, device->value_count * sizeof(uint32_t));
+	memcpy(values, device->values, device->value_count * sizeof(uint32_t));
 
 	return 0;
 }
