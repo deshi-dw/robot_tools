@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include <windows.h>
+#include <errhandlingapi.h>
 #include <hidsdi.h>
 #include <hidpi.h>
 #include <SetupAPI.h>
@@ -17,6 +18,27 @@
 
 typedef unsigned long  ulong;
 typedef unsigned short ushort;
+
+#ifdef RHID_DEBUG_ENABLED
+#ifndef DEBUG_TIME
+#define DEBUG_TIME
+#endif
+
+#define RHID_VARGS(...) __VA_ARGS__
+#define RHID_ERR(message, ...) fprintf(stderr, message "\n", __VA_ARGS__);
+#define RHID_ERR_SYS(message, sys_err)                                  \
+	{                                                                   \
+		char errmsg[256];                                               \
+		FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, sys_err,        \
+					  LANG_USER_DEFAULT, errmsg, sizeof(errmsg), NULL); \
+		fprintf(stderr, message);                                       \
+		fprintf(stderr, " error: %s\n", errmsg);                        \
+	}
+#else
+#define RHID_ERR(message)
+#define RHID_ERR_SYS(message, sys_err)
+#define RHID_VARGS(...)
+#endif
 
 #define ERROR_TO_STRING_CASE(char_msg, err) \
 	case(err):                              \
@@ -83,10 +105,7 @@ int rhid_get_device_count() {
 		&hid_guid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
 
 	if(dev_list == INVALID_HANDLE_VALUE) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "failed to get devices from device class. error: %lu\n",
-				GetLastError());
-#endif
+		RHID_ERR_SYS("failed to get devices from device class", GetLastError());
 		return -1;
 	}
 
@@ -106,12 +125,8 @@ int rhid_get_device_count() {
 				break;
 			}
 			else {
-#ifdef RHID_DEBUG_ENABLED
-				fprintf(stderr,
-						"failed to enumerate through device interfaces. error: "
-						"%lu\n",
-						GetLastError());
-#endif
+				RHID_ERR_SYS("failed to enumerate through device interfaces",
+							 GetLastError());
 				SetupDiDestroyDeviceInfoList(dev_list);
 				return -1;
 			}
@@ -119,7 +134,7 @@ int rhid_get_device_count() {
 	}
 
 	// back-track to the last valid index which will be the final size.
-	for(last_index = last_index; last_index >= 0; last_index--) {
+	for(; last_index >= 0; last_index--) {
 		SP_DEVICE_INTERFACE_DATA iface = {0};
 		iface.cbSize				   = sizeof(SP_DEVICE_INTERFACE_DATA);
 		if(SetupDiEnumDeviceInterfaces(dev_list, NULL, &hid_guid, last_index,
@@ -141,10 +156,8 @@ static inline void* _rhid_open_device_handle(const char* path,
 	void* handle = CreateFileA(path, access_rights, share_mode, NULL,
 							   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if(handle == INVALID_HANDLE_VALUE) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "failed to open device \"%s\". error: %lu\n", path,
-				GetLastError());
-#endif
+		RHID_ERR_SYS(RHID_VARGS("failed to open device \"%s\"", path),
+					 GetLastError());
 		return NULL;
 	}
 
@@ -161,10 +174,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		&hid_guid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
 
 	if(dev_list == INVALID_HANDLE_VALUE) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "failed to get devices from device class. error: %lu\n",
-				GetLastError());
-#endif
+		RHID_ERR_SYS("failed to get devices from device class", GetLastError());
 		return -1;
 	}
 
@@ -182,12 +192,8 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 				break;
 			}
 			else {
-#ifdef RHID_DEBUG_ENABLED
-				fprintf(stderr,
-						"failed to enumerate through device interfaces. error: "
-						"%lu\n",
-						GetLastError());
-#endif
+				RHID_ERR_SYS("failed to enumerate through device interfaces",
+							 GetLastError());
 				SetupDiDestroyDeviceInfoList(dev_list);
 				return -1;
 			}
@@ -198,12 +204,8 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		if(SetupDiGetDeviceInterfaceDetailA(dev_list, &iface, NULL, 0,
 											&iface_info_size, NULL) == FALSE) {
 			if(GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-#ifdef RHID_DEBUG_ENABLED
-				fprintf(
-					stderr,
-					"failed to get device interface detail size. error: %lu\n",
-					GetLastError());
-#endif
+				RHID_ERR_SYS("failed to get device interface detail size",
+							 GetLastError());
 				return -1;
 			}
 		}
@@ -216,11 +218,8 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		if(SetupDiGetDeviceInterfaceDetailA(dev_list, &iface, iface_info,
 											iface_info_size, NULL,
 											NULL) == FALSE) {
-#ifdef RHID_DEBUG_ENABLED
-			fprintf(stderr,
-					"failed to get device interface detail data. error: %lu\n",
-					GetLastError());
-#endif
+			RHID_ERR_SYS("failed to get device interface detail data",
+						 GetLastError());
 			return -1;
 		}
 
@@ -235,10 +234,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		}
 
 		free(iface_info);
-
-#ifdef RHID_DEBUG_ENABLED
-		printf("\ngetting device (%i) \"%s\"\n", i, devices[i].path);
-#endif
+		RHID_ERR("\ngetting device (%i) \"%s\"", i, devices[i].path);
 		// open the the device with as little permissions as possible so we can
 		// read some attributes.
 		devices[i].handle =
@@ -260,11 +256,9 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 			devices[i].product_id = attributes.ProductID;
 			devices[i].version	  = attributes.VersionNumber;
 		}
-#ifdef RHID_DEBUG_ENABLED
 		else {
-			fprintf(stderr, "faild to retrieve device attributes.\n");
+			RHID_ERR("faild to retrieve device attributes");
 		}
-#endif
 
 		// TODO think about moving manufacturer_name to global cache.
 		// this could potentially optimize the allocation and deletion of the
@@ -277,11 +271,9 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 			wcstombs(devices[i].manufacturer_name, manufacturer_name,
 					 sizeof(devices[i].manufacturer_name));
 		}
-#ifdef RHID_DEBUG_ENABLED
 		else {
-			fprintf(stderr, "failed to retrieve device manufacturer name.\n");
+			RHID_ERR("failed to retrieve device manufacturer name");
 		}
-#endif
 
 		// TODO think about moving product_name to global cache.
 		// this would be for the same reason as manufacturer_name.
@@ -293,18 +285,15 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 			wcstombs(devices[i].product_name, product_name,
 					 sizeof(devices[i].product_name));
 		}
-#ifdef RHID_DEBUG_ENABLED
 		else {
-			fprintf(stderr, "failed to retrieve device product name.\n");
+			RHID_ERR("failed to retrieve device product name");
 		}
-#endif
 
 		// get preparsed data from the device.
 		PHIDP_PREPARSED_DATA preparsed = {0};
 		if(HidD_GetPreparsedData(devices[i].handle, &preparsed) == FALSE) {
-#ifdef RHID_DEBUG_ENABLED
-			fprintf(stderr, "failed to get pre-parsed data from device.\n");
-#endif
+			RHID_ERR("failed to get pre-parsed data from device");
+
 			CloseHandle(devices[i].handle);
 			devices[i].handle = NULL;
 			continue;
@@ -319,11 +308,9 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 			ulong ret =
 				HidP_GetCaps((PHIDP_PREPARSED_DATA) preparsed, &dev_caps);
 			if(ret != HIDP_STATUS_SUCCESS) {
-#ifdef RHID_DEBUG_ENABLED
-				fprintf(stderr,
-						"failed to get device's capabilities. error: %s\n",
-						_rhid_hidp_err_to_str(ret));
-#endif
+				RHID_ERR("failed to get device's capabilities error: %s",
+						 _rhid_hidp_err_to_str(ret));
+
 				CloseHandle(devices[i].handle);
 				devices[i].handle = NULL;
 				HidD_FreePreparsedData(preparsed);
@@ -357,20 +344,15 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 					HidP_Input, button_caps,
 					(PUSHORT) &devices[i].cap_button_count, preparsed);
 				if(ret != HIDP_STATUS_SUCCESS) {
-#ifdef RHID_DEBUG_ENABLED
-					fprintf(stderr,
-							"failed to get device's button capabilities. "
-							"error: %s\n",
-							_rhid_hidp_err_to_str(ret));
-#endif
+					RHID_ERR("failed to get device's button error: %s",
+							 _rhid_hidp_err_to_str(ret));
 				}
 				else {
 					// assign button report ids.
 					if(dev_caps.NumberInputButtonCaps > RHID_MAX_BUTTON_CAPS) {
-#ifdef RHID_DEBUG_ENABLED
-						fprintf(stderr, "the number of button caps is larger "
-										"than the maximum supported.\n");
-#endif
+						RHID_ERR("the number of button caps is larger than the "
+								 "maximum supported");
+
 						CloseHandle(devices[i].handle);
 						devices[i].handle = NULL;
 						HidD_FreePreparsedData(preparsed);
@@ -412,20 +394,16 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 					HidP_Input, value_caps,
 					(PUSHORT) &devices[i].cap_value_count, preparsed);
 				if(ret != HIDP_STATUS_SUCCESS) {
-#ifdef RHID_DEBUG_ENABLED
-					fprintf(stderr,
-							"failed to get device's value capabilities. "
-							"error: %s\n",
-							_rhid_hidp_err_to_str(ret));
-#endif
+					RHID_ERR(
+						"failed to get device's value capabilities error: %s",
+						_rhid_hidp_err_to_str(ret));
 				}
 				else {
 					// assign value report ids.
 					if(dev_caps.NumberInputValueCaps > RHID_MAX_VALUE_CAPS) {
-#ifdef RHID_DEBUG_ENABLED
-						fprintf(stderr, "the number of value caps is larger "
-										"than the maximum supported.\n");
-#endif
+						RHID_ERR("the number of value caps is larger "
+								 "than the maximum supported");
+
 						CloseHandle(devices[i].handle);
 						devices[i].handle = NULL;
 						HidD_FreePreparsedData(preparsed);
@@ -437,9 +415,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 						devices[i].value_pages[k] = value_caps[k].UsagePage;
 
 						if(value_caps[k].IsRange == TRUE) {
-#ifdef RHID_DEBUG_ENABLED
-							fprintf(stderr, "ranged values not supported.\n");
-#endif
+							RHID_ERR("ranged values not supported");
 							devices[i].value_usages[k] =
 								value_caps[k].Range.UsageMax;
 						}
@@ -503,10 +479,8 @@ int rhid_select_devices(rhid_device_t* devices, int count,
 	for(int i = 0; i < count; i++) {
 		if(select_func(devices[i].usage_page, devices[i].usage) == 1) {
 			if(select_index > selected_count) {
-#ifdef RHID_DEBUG_ENABLED
-				fprintf(stderr, "couldn't select all devices as the selection "
-								"count was not big enough.\n");
-#endif
+				RHID_ERR("couldn't select all devices as the selection "
+						 "count was not big enough");
 				return -1;
 			}
 			selected[select_index] = &devices[i];
@@ -534,9 +508,7 @@ int rhid_open(rhid_device_t* device) {
 	// get preparsed data from the device.
 	PHIDP_PREPARSED_DATA preparsed = {0};
 	if(HidD_GetPreparsedData(device->handle, &preparsed) == FALSE) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "failed to get pre-parsed data from device.\n");
-#endif
+		RHID_ERR("failed to get pre-parsed data from device");
 		CloseHandle(device->handle);
 		device->handle = NULL;
 		return -1;
@@ -590,33 +562,25 @@ int rhid_close(rhid_device_t* device) {
 
 int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 	if(device->handle == NULL || device->is_open == 0) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "can't get a report because the device isn't open.\n");
-#endif
+		RHID_ERR("can't get a report because the device isn't open");
 		return -1;
 	}
 
-// get raw data from the device.
-#ifdef RHID_DEBUG_ENABLED
+	// get raw data from the device.
 	DEBUG_TIME_START("rhid 'get raw button data from device'");
-#endif
+
 	device->report[0] = report_id;
 	if(HidD_GetInputReport(device->handle, device->report,
 						   (u_long) device->report_size) == FALSE) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "didn't receive a device report. error: %lu\n",
-				GetLastError());
-#endif
+		RHID_ERR_SYS("didn't receive a device report", GetLastError())
 		return -1;
 	}
-#ifdef RHID_DEBUG_ENABLED
+
 	DEBUG_TIME_STOP();
-#endif
 
 	// parse report into actives buttons list.
-#ifdef RHID_DEBUG_ENABLED
 	DEBUG_TIME_START("rhid 'reallocating cache'");
-#endif
+
 	if(_rhid_win_gcache.usages_pages_count < device->button_count) {
 		if(_rhid_win_gcache.usages_pages == NULL) {
 			_rhid_win_gcache.usages_pages =
@@ -624,7 +588,7 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 
 			if(_rhid_win_gcache.usages_ordered == NULL) {
 				_rhid_win_gcache.usages_ordered =
-					malloc(device->button_count * sizeof(USAGE_AND_PAGE));
+					malloc(device->button_count * sizeof(USAGE));
 			}
 		}
 		else {
@@ -634,18 +598,15 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 
 			_rhid_win_gcache.usages_ordered =
 				realloc(_rhid_win_gcache.usages_ordered,
-						device->button_count * sizeof(USAGE_AND_PAGE));
+						device->button_count * sizeof(USAGE));
 		}
 
 		_rhid_win_gcache.usages_pages_count = device->button_count;
 	}
-#ifdef RHID_DEBUG_ENABLED
-	DEBUG_TIME_STOP();
-#endif
 
-#ifdef RHID_DEBUG_ENABLED
+	DEBUG_TIME_STOP();
+
 	DEBUG_TIME_START("rhid 'parse report into actives buttons list'");
-#endif
 
 	ulong			active_count = device->button_count;
 	USAGE_AND_PAGE* usages_pages = _rhid_win_gcache.usages_pages;
@@ -654,11 +615,8 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 									 (PHIDP_PREPARSED_DATA) device->_preparsed,
 									 device->report, device->report_size);
 		if(ret != HIDP_STATUS_SUCCESS) {
-#ifdef RHID_DEBUG_ENABLED
-			fprintf(stderr,
-					"failed to parse button data from report. error: %s\n",
-					_rhid_hidp_err_to_str(ret));
-#endif
+			RHID_ERR("failed to parse button data from report error: %s",
+					 _rhid_hidp_err_to_str(ret));
 			return -1;
 		}
 	}
@@ -690,32 +648,24 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 		}
 	}
 
-#ifdef RHID_DEBUG_ENABLED
 	DEBUG_TIME_STOP();
-#endif
 
 	return 0;
 }
 
 int rhid_report_values(rhid_device_t* device, uint8_t report_id) {
 	if(device->handle == NULL || device->is_open == 0) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "can't get a report because the device isn't open.\n");
-#endif
+		RHID_ERR("can't get a report because the device isn't open");
 		return -1;
 	}
 
 	// get raw data from the device.
-#ifdef RHID_DEBUG_ENABLED
 	DEBUG_TIME_START("rhid 'get raw value data from the device'");
-#endif
+
 	device->report[0] = report_id;
 	if(HidD_GetInputReport(device->handle, device->report,
 						   (u_long) device->report_size) == FALSE) {
-#ifdef RHID_DEBUG_ENABLED
-		fprintf(stderr, "didn't receive a device report. error: %lu\n",
-				GetLastError());
-#endif
+		RHID_ERR_SYS("didn't receive a device report", GetLastError());
 		return -1;
 	}
 
@@ -727,15 +677,13 @@ int rhid_report_values(rhid_device_t* device, uint8_t report_id) {
 				device->report_size);
 
 			if(ret != HIDP_STATUS_SUCCESS) {
-				fprintf(stderr,
-						"failed to parse value data from report. error: %s\n",
-						_rhid_hidp_err_to_str(ret));
+				RHID_ERR("failed to parse value data from report error %s",
+						 _rhid_hidp_err_to_str(ret));
 			}
 		}
 	}
-#ifdef RHID_DEBUG_ENABLED
+
 	DEBUG_TIME_STOP();
-#endif
 
 	return 0;
 }

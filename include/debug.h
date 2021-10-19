@@ -41,7 +41,7 @@ void   debug_time_set_last_ms(double ms);
 double debug_time_last_ms();
 
 #ifdef DEBUG_TIME
-#define DEBUG_PRINT_TIME(msg, time) printf("%s took %d ms\n", msg, time);
+#define DEBUG_PRINT_TIME(msg, time) printf("%s took %ld ms\n", msg, time);
 
 #define DEBUG_TIME_START(name) \
 	{                          \
@@ -49,16 +49,17 @@ double debug_time_last_ms();
 		debug_time_lvl_next(); \
 		long dbgt_start = debug_time_now();
 
-#define DEBUG_TIME_STOP()                                                   \
-	long dbgt_diff = debug_time_now() - dbgt_start;                         \
-	/*double dbgt_ms	 = (double) dbgt_diff;*/                               \
-	long dbgt_ms = dbgt_diff;                                               \
-	for(const char* msg = debug_time_pop(debug_time_lvl()); msg != NULL;) { \
-		DEBUG_PRINT_TIME(msg, dbgt_ms);                                     \
-	}                                                                       \
-	DEBUG_PRINT_TIME(debug_time_pop(debug_time_lvl() - 1), dbgt_ms);        \
-	debug_time_lvl_prev();                                                  \
-	debug_time_set_last_ms(dbgt_ms);                                        \
+#define DEBUG_TIME_STOP()                                            \
+	long		dbgt_diff = debug_time_now() - dbgt_start;           \
+	long		dbgt_ms	  = dbgt_diff;                               \
+	const char* msg;                                                 \
+	do {                                                             \
+		msg = debug_time_pop(debug_time_lvl());                      \
+		DEBUG_PRINT_TIME(msg, dbgt_ms);                              \
+	} while(msg != NULL);                                            \
+	DEBUG_PRINT_TIME(debug_time_pop(debug_time_lvl() - 1), dbgt_ms); \
+	debug_time_lvl_prev();                                           \
+	debug_time_set_last_ms(dbgt_ms);                                 \
 	}
 #else
 #define DEBUG_PRINT_TIME(msg, time)
