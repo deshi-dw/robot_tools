@@ -207,6 +207,8 @@ int rhid_get_value(rhid_device_t* device, int index);
 int rhid_get_button_count(rhid_device_t* device);
 int rhid_get_value_count(rhid_device_t* device);
 
+int rhid_is_open(rhid_device_t* device);
+
 uint16_t rhid_get_vendor_id(rhid_device_t* device);
 uint16_t rhid_get_product_id(rhid_device_t* device);
 uint16_t rhid_get_product_id(rhid_device_t* device);

@@ -721,6 +721,10 @@ int rhid_get_value_count(rhid_device_t* device) {
 	return device->value_count;
 }
 
+int rhid_is_open(rhid_device_t* device) {
+	return device->is_open;
+}
+
 uint16_t rhid_get_vendor_id(rhid_device_t* device) {
 	return device->vendor_id;
 }
