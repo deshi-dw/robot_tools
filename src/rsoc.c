@@ -1,4 +1,4 @@
-#include "rnet2.h"
+#include "rsoc.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -30,8 +30,8 @@
 
 #endif
 
-#define NET_ERR(message) fprintf(stderr, message);
-#define NET_ERR_SOCK(message, sockerr)                   \
+#define RSOC_ERR(message) fprintf(stderr, message);
+#define RSOC_ERR_SOCK(message, sockerr)                   \
 	{                                                    \
 		char errmsg[256];                                \
 		strerror_s(errmsg, sizeof(errmsg), sockerr);     \
@@ -42,7 +42,7 @@
 // These two functions monitor file descriptors until they are ready for I/O
 // operations.
 
-int net_init() {
+int rsoc_init() {
 	WSADATA data;
 	if(WSAStartup(0, &data) != 0) {
 		return -1;
@@ -53,13 +53,13 @@ int net_init() {
 
 // FIXME function doesn't work with TCP. See
 // https://linux.die.net/man/2/accept
-static int _net_conn(char* addr, const int addr_size, const int port,
-					 net_socket_t* sock, int role) {
+static int _rsoc_conn(char* addr, const int addr_size, const int port,
+					 rsoc_socket_t* sock, int role) {
 	if(sock == NULL) {
-		return NET_ERR_RESOLV_NULSOCK;
+		return RSOC_ERR_RESOLV_NULSOCK;
 	}
 
-	if(role != NET_ROLE_HOST && role != NET_ROLE_CLIENT) {
+	if(role != RSOC_ROLE_HOST && role != RSOC_ROLE_CLIENT) {
 		return -1;
 	}
 
@@ -68,7 +68,7 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 	struct addrinfo hints = {0};
 	hints.ai_family		  = sock->family;
 	hints.ai_socktype	  = sock->type;
-	hints.ai_flags		  = NET_AI_PASSIVE;
+	hints.ai_flags		  = RSOC_AI_PASSIVE;
 	hints.ai_protocol	  = sock->protocol;
 
 	// convert the numerical port value into a string value.
@@ -79,7 +79,7 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 	struct addrinfo* info_list;
 	ret = getaddrinfo(addr, port_str, &hints, &info_list);
 	if(ret < 0) {
-		return NET_ERR_RESOLV_ADDRINFO;
+		return RSOC_ERR_RESOLV_ADDRINFO;
 	}
 
 	// start the loop again but this time fill the list.
@@ -94,7 +94,7 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 			continue;
 		}
 
-		if(role == NET_ROLE_CLIENT) {
+		if(role == RSOC_ROLE_CLIENT) {
 			// try to connect the socket to the host. if this fails, error out.
 			if(connect(sock->fd, info_curr->ai_addr, info_curr->ai_addrlen) <
 			   0) {
@@ -105,9 +105,9 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 #endif
 			}
 			freeaddrinfo(info_list);
-			return NET_ERR_RESOLV_CONN;
+			return RSOC_ERR_RESOLV_CONN;
 		}
-		else if(role == NET_ROLE_HOST) {
+		else if(role == RSOC_ROLE_HOST) {
 			// if the socket was created successfully, bind it to the address so
 			// we can use it as a host.
 			if(bind(sock->fd, info_curr->ai_addr, info_curr->ai_addrlen) < 0) {
@@ -117,7 +117,7 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 				close(sock->fd);
 #endif
 				freeaddrinfo(info_list);
-				return NET_ERR_HOST_BIND;
+				return RSOC_ERR_HOST_BIND;
 			}
 
 			// non-blocking socket disabled here because it is more convinient
@@ -132,7 +132,7 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 #endif
 			if(ret != 0) {
 				freeaddrinfo(info_list);
-				return NET_ERR_RESOLV_NOBLOCK;
+				return RSOC_ERR_RESOLV_NOBLOCK;
 			}
 
 			sock->addr.addr = *info_curr->ai_addr;
@@ -143,7 +143,7 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 			sock->family   = info_curr->ai_family;
 			sock->type	   = info_curr->ai_socktype;
 			sock->protocol = info_curr->ai_protocol;
-			sock->role	   = NET_ROLE_CLIENT;
+			sock->role	   = RSOC_ROLE_CLIENT;
 
 			break;
 		}
@@ -154,13 +154,13 @@ static int _net_conn(char* addr, const int addr_size, const int port,
 
 // CLIENT FUNCTIONS
 
-int net_resolve_mdns(char* addr, const int addr_size, net_socket_t* socket) {
+int rsoc_resolve_mdns(char* addr, const int addr_size, rsoc_socket_t* socket) {
 	return 0;
 }
 
-int net_resolve_ip(char* addr, const int addr_size, const int port,
-				   net_socket_t* sock) {
-	int ret = _net_conn(addr, addr_size, port, sock, NET_ROLE_CLIENT);
+int rsoc_resolve_ip(char* addr, const int addr_size, const int port,
+				   rsoc_socket_t* sock) {
+	int ret = _rsoc_conn(addr, addr_size, port, sock, RSOC_ROLE_CLIENT);
 	if(ret < 0) {
 		return ret;
 	}
@@ -170,8 +170,8 @@ int net_resolve_ip(char* addr, const int addr_size, const int port,
 
 // HOST FUNCTIONS
 
-int net_host(const int port, net_socket_t* sock) {
-	int ret = _net_conn(NULL, 0, port, sock, NET_ROLE_HOST);
+int rsoc_host(const int port, rsoc_socket_t* sock) {
+	int ret = _rsoc_conn(NULL, 0, port, sock, RSOC_ROLE_HOST);
 	if(ret < 0) {
 		return ret;
 	}
@@ -179,16 +179,16 @@ int net_host(const int port, net_socket_t* sock) {
 	return 0;
 }
 
-int net_host_mdns(char* addr, const int addr_size, const int port,
-				  net_socket_t* sock) {
+int rsoc_host_mdns(char* addr, const int addr_size, const int port,
+				  rsoc_socket_t* sock) {
 	return -1;
 }
 
 
 // GENERIC FUNCTIONS
 
-int net_send(net_socket_t* sock, uint8_t* data, const int data_size) {
-	if(sock->role == NET_ROLE_NONE) {
+int rsoc_send(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
+	if(sock->role == RSOC_ROLE_NONE) {
 		return -1;
 	}
 
@@ -196,7 +196,7 @@ int net_send(net_socket_t* sock, uint8_t* data, const int data_size) {
 
 	// send the data to whatever address is saved in sock if this is a host
 	// or to whatever address the socket is connected if this is a client.
-	if(sock->role == NET_ROLE_HOST) {
+	if(sock->role == RSOC_ROLE_HOST) {
 		if(sock->addr_size <= 0) {
 			return -1;
 		}
@@ -204,27 +204,27 @@ int net_send(net_socket_t* sock, uint8_t* data, const int data_size) {
 		send_size = sendto(sock->fd, (const char*) data, data_size, 0,
 						   &sock->addr.addr, sock->addr_size);
 	}
-	else if(sock->role == NET_ROLE_CLIENT) {
+	else if(sock->role == RSOC_ROLE_CLIENT) {
 		send_size = send(sock->fd, (const char*) data, data_size, 0);
 	}
 
 	// error out if nothing was sent or an error occured.
 	if(send_size <= 0) {
-		NET_ERR_SOCK("didn't send any data in net_send", errno);
+		RSOC_ERR_SOCK("didn't send any data in rsoc_send", errno);
 		return -1;
 	}
 
 	return send_size;
 }
 
-int net_receive(net_socket_t* sock, uint8_t* data, const int data_size) {
-	if(sock->role == NET_ROLE_NONE) {
+int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
+	if(sock->role == RSOC_ROLE_NONE) {
 		return -1;
 	}
 
 	int recv_size = 0;
 
-	if(sock->role == NET_ROLE_HOST) {
+	if(sock->role == RSOC_ROLE_HOST) {
 		struct sockaddr_storage addr	  = {0};
 		int						addr_size = sizeof(struct sockaddr_storage);
 
@@ -233,8 +233,8 @@ int net_receive(net_socket_t* sock, uint8_t* data, const int data_size) {
 		// recv_size = recvfrom(sock->fd, data, data_size, 0, NULL, NULL);
 
 		if(recv_size <= 0) {
-			NET_ERR_SOCK(
-				"didn't recieve any data as host when calling net_receive",
+			RSOC_ERR_SOCK(
+				"didn't recieve any data as host when calling rsoc_receive",
 				errno);
 			return -1;
 		}
@@ -252,13 +252,13 @@ int net_receive(net_socket_t* sock, uint8_t* data, const int data_size) {
 			return -1;
 		}
 	}
-	else if(sock->role == NET_ROLE_CLIENT) {
+	else if(sock->role == RSOC_ROLE_CLIENT) {
 		// receive data from whatever host we're connected to.
 		recv_size = recv(sock->fd, (char*) data, data_size, 0);
 
 		if(recv_size <= 0) {
-			NET_ERR_SOCK(
-				"didn't recieve any data as client when calling net_receive",
+			RSOC_ERR_SOCK(
+				"didn't recieve any data as client when calling rsoc_receive",
 				errno);
 			return -1;
 		}
@@ -267,7 +267,7 @@ int net_receive(net_socket_t* sock, uint8_t* data, const int data_size) {
 	return recv_size;
 }
 
-int net_close(net_socket_t* sock) {
+int rsoc_close(rsoc_socket_t* sock) {
 #ifdef _WIN32
 	int ret = closesocket(sock->fd);
 #else
@@ -277,7 +277,7 @@ int net_close(net_socket_t* sock) {
 		return -1;
 	}
 
-	sock->role = NET_ROLE_NONE;
+	sock->role = RSOC_ROLE_NONE;
 
 	return 0;
 }
