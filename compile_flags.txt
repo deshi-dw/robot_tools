@@ -1,7 +1,6 @@
 -xc
 -Wall
--std=c11
---target=x86_64-pc-windows-gnu
+-std=c99
 -shared
 -I
 include/

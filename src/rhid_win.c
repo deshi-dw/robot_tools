@@ -1,11 +1,13 @@
 #include "debug.h"
 #include "rhid.h"
 
+#include <corecrt_malloc.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include <vcruntime_string.h>
 #include <windows.h>
 #include <errhandlingapi.h>
 #include <hidsdi.h>
@@ -32,7 +34,7 @@ typedef unsigned short ushort;
 		FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, sys_err,        \
 					  LANG_USER_DEFAULT, errmsg, sizeof(errmsg), NULL); \
 		fprintf(stderr, message);                                       \
-		fprintf(stderr, " error: %s\n", errmsg);                        \
+		fprintf(stderr, " error(%#010x): %s\n", sys_err, errmsg);       \
 	}
 #else
 #define RHID_ERR(message)
@@ -73,6 +75,8 @@ static const char* _rhid_hidp_err_to_str(ulong status) {
 	return msg;
 }
 
+// TODO remove _rhid_win_gcache as most of what I thought it was needed for in
+// largely unessasery.
 static struct {
 	ulong dev_iface_list_size;
 	char* dev_iface_list;
@@ -86,7 +90,16 @@ static struct {
 	ulong			usages_pages_count;
 	USAGE_AND_PAGE* usages_pages;
 	USAGE*			usages_ordered;
+
+	// TODO move report_overlapped to device so more than one device can be
+	// opened at once.
+	OVERLAPPED report_overlapped;
 } _rhid_win_gcache = {0};
+
+struct rhid_native_t {
+	int		   is_reading;
+	OVERLAPPED report_overlapped;
+};
 
 // TODO rhid_get_device_count can be optimized.
 // to do this, store a pre-allocated buffer for the interface list in a
@@ -154,7 +167,7 @@ static inline void* _rhid_open_device_handle(const char* path,
 											 ulong		 access_rights,
 											 ulong		 share_mode) {
 	void* handle = CreateFileA(path, access_rights, share_mode, NULL,
-							   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+							   OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 	if(handle == INVALID_HANDLE_VALUE) {
 		RHID_ERR_SYS(RHID_VARGS("failed to open device \"%s\"", path),
 					 GetLastError());
@@ -164,6 +177,8 @@ static inline void* _rhid_open_device_handle(const char* path,
 	return handle;
 }
 
+// TODO reduce the insane level of nested loops and if statements.
+//		I think there is something like 7 levels of nesting at one point.
 int rhid_get_devices(rhid_device_t* devices, int count) {
 	// get the HIDClass devices guid.
 	GUID hid_guid = {0};
@@ -182,7 +197,8 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 		// set device values to zero.
 		memset(&devices[i], 0, sizeof(rhid_device_t));
 
-		// get the next interface at index i.
+		// get the next interface at index i. All the device interface is for is
+		// getting the device path.
 		SP_DEVICE_INTERFACE_DATA iface = {0};
 		iface.cbSize				   = sizeof(SP_DEVICE_INTERFACE_DATA);
 
@@ -348,7 +364,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 							 _rhid_hidp_err_to_str(ret));
 				}
 				else {
-					// assign button report ids.
+					// assign button report ids, page, usage, and index.
 					if(dev_caps.NumberInputButtonCaps > RHID_MAX_BUTTON_CAPS) {
 						RHID_ERR("the number of button caps is larger than the "
 								 "maximum supported");
@@ -359,9 +375,40 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 						continue;
 					}
 
+					int btn_desc_idx = 0;
 					for(int k = 0; k < dev_caps.NumberInputButtonCaps; k++) {
-						devices[i].button_report_ids[k] =
+						devices[i].button_descriptors[btn_desc_idx].report_id =
 							button_caps[k].ReportID;
+
+						if(button_caps[k].IsRange == TRUE) {
+							for(uint16_t u = button_caps[k].Range.UsageMin;
+								u <= button_caps[k].Range.UsageMax; u++) {
+								devices[i]
+									.button_descriptors[btn_desc_idx]
+									.page = button_caps[k].UsagePage;
+								devices[i]
+									.button_descriptors[btn_desc_idx]
+									.usage = u;
+								// TODO confirm that this is the correct index.
+								devices[i]
+									.button_descriptors[btn_desc_idx]
+									.index = btn_desc_idx;
+
+								btn_desc_idx++;
+							}
+						}
+						else {
+							devices[i].button_descriptors[btn_desc_idx].page =
+								button_caps[k].UsagePage;
+							devices[i].button_descriptors[btn_desc_idx].usage =
+								button_caps[k].NotRange.Usage;
+
+							// TODO confirm that this is the correct index.
+							devices[i].button_descriptors[btn_desc_idx].index =
+								btn_desc_idx;
+						}
+
+						btn_desc_idx++;
 					}
 				}
 			}
@@ -399,7 +446,7 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 						_rhid_hidp_err_to_str(ret));
 				}
 				else {
-					// assign value report ids.
+					// assign value report ids, page, usage, min/max, and index.
 					if(dev_caps.NumberInputValueCaps > RHID_MAX_VALUE_CAPS) {
 						RHID_ERR("the number of value caps is larger "
 								 "than the maximum supported");
@@ -411,18 +458,27 @@ int rhid_get_devices(rhid_device_t* devices, int count) {
 					}
 
 					for(int k = 0; k < dev_caps.NumberInputValueCaps; k++) {
-						devices[i].value_report_ids[k] = value_caps[k].ReportID;
-						devices[i].value_pages[k] = value_caps[k].UsagePage;
+						devices[i].value_descriptors[k].report_id =
+							value_caps[k].ReportID;
+						devices[i].value_descriptors[k].page =
+							value_caps[k].UsagePage;
 
 						if(value_caps[k].IsRange == TRUE) {
 							RHID_ERR("ranged values not supported");
-							devices[i].value_usages[k] =
+							devices[i].value_descriptors[k].usage =
 								value_caps[k].Range.UsageMax;
 						}
 						else {
-							devices[i].value_usages[k] =
+							devices[i].value_descriptors[k].usage =
 								value_caps[k].NotRange.Usage;
 						}
+
+						devices[i].value_descriptors[k].logical_min =
+							value_caps[k].LogicalMin;
+						devices[i].value_descriptors[k].logical_max =
+							value_caps[k].LogicalMax;
+
+						devices[i].value_descriptors[k].index = k;
 					}
 				}
 			}
@@ -491,6 +547,43 @@ int rhid_select_devices(rhid_device_t* devices, int count,
 	return 0;
 }
 
+static int rhid_read_report(rhid_device_t* device, uint8_t report_id) {
+	unsigned long bytes_read = 0;
+
+	if(device->native->is_reading) {
+		// check to see if read is done.
+		GetOverlappedResult(device->handle, &_rhid_win_gcache.report_overlapped,
+							&bytes_read, FALSE);
+
+		if(bytes_read >= device->report_size) {
+			device->native->is_reading = 0;
+		}
+		else {
+			return 0;
+		}
+	}
+
+	// set the first byte to be the report id as specified in the docs.
+	device->report[0] = report_id;
+
+	if(ReadFile(device->handle, device->report, device->report_size,
+				&bytes_read, &_rhid_win_gcache.report_overlapped) == FALSE) {
+		if(GetLastError() != ERROR_IO_PENDING) {
+			RHID_ERR_SYS("didn't read a device report", (int) GetLastError());
+			// TODO think about doing return -1 instead. Note that this will
+			// make any if statements return true which is wierd.
+			return 0;
+		}
+	}
+
+	if(device->native->is_reading == 0) {
+		device->native->is_reading = 1;
+		return 1;
+	}
+
+	return 0;
+}
+
 int rhid_open(rhid_device_t* device) {
 	// open the file while trying different share options.
 	device->handle = _rhid_open_device_handle(
@@ -514,11 +607,26 @@ int rhid_open(rhid_device_t* device) {
 		return -1;
 	}
 
+	if(HidD_FlushQueue(device->handle) == FALSE) {
+		RHID_ERR_SYS("failed to flush the device.", (int) GetLastError());
+	}
+
 	device->_preparsed = preparsed;
 	device->report	   = malloc(device->report_size);
 
 	device->buttons = calloc(device->button_count, sizeof(uint8_t));
 	device->values	= calloc(device->value_count, sizeof(uint32_t));
+
+	device->native			   = calloc(1, sizeof(rhid_native_t));
+	device->native->is_reading = 0;
+
+	// read initial report.
+	if(HidD_GetInputReport(device->handle, device->report, device->report_size) == FALSE) {
+		RHID_ERR_SYS("failed to get initial input report", GetLastError());
+	}
+	else {
+		// TODO read initial report values.
+	}
 
 	device->is_open = 1;
 
@@ -555,62 +663,30 @@ int rhid_close(rhid_device_t* device) {
 		device->values = NULL;
 	}
 
+	if(device->native != NULL) {
+		free(device->native);
+		device->native = NULL;
+	}
+
 	device->is_open = 0;
 
 	return 0;
 }
 
-int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
+int rhid_report(rhid_device_t* device, uint8_t report_id) {
+	// If the device isn't open, error out.
 	if(device->handle == NULL || device->is_open == 0) {
 		RHID_ERR("can't get a report because the device isn't open");
 		return -1;
 	}
 
-	// get raw data from the device.
-	DEBUG_TIME_START("rhid 'get raw button data from device'");
+	// read report.
+	int report_avaliable = rhid_read_report(device, report_id);
 
-	device->report[0] = report_id;
-	if(HidD_GetInputReport(device->handle, device->report,
-						   (u_long) device->report_size) == FALSE) {
-		RHID_ERR_SYS("didn't receive a device report", GetLastError())
-		return -1;
-	}
-
-	DEBUG_TIME_STOP();
-
-	// parse report into actives buttons list.
-	DEBUG_TIME_START("rhid 'reallocating cache'");
-
-	if(_rhid_win_gcache.usages_pages_count < device->button_count) {
-		if(_rhid_win_gcache.usages_pages == NULL) {
-			_rhid_win_gcache.usages_pages =
-				malloc(device->button_count * sizeof(USAGE_AND_PAGE));
-
-			if(_rhid_win_gcache.usages_ordered == NULL) {
-				_rhid_win_gcache.usages_ordered =
-					malloc(device->button_count * sizeof(USAGE));
-			}
-		}
-		else {
-			_rhid_win_gcache.usages_pages =
-				realloc(_rhid_win_gcache.usages_pages,
-						device->button_count * sizeof(USAGE_AND_PAGE));
-
-			_rhid_win_gcache.usages_ordered =
-				realloc(_rhid_win_gcache.usages_ordered,
-						device->button_count * sizeof(USAGE));
-		}
-
-		_rhid_win_gcache.usages_pages_count = device->button_count;
-	}
-
-	DEBUG_TIME_STOP();
-
-	DEBUG_TIME_START("rhid 'parse report into actives buttons list'");
-
-	ulong			active_count = device->button_count;
-	USAGE_AND_PAGE* usages_pages = _rhid_win_gcache.usages_pages;
-	{
+	// parse button data from report.
+	ulong		   active_count					  = MAX_BUTTON_COUNT;
+	USAGE_AND_PAGE usages_pages[MAX_BUTTON_COUNT] = {0};
+	if(report_avaliable) {
 		ulong ret = HidP_GetUsagesEx(HidP_Input, 0, usages_pages, &active_count,
 									 (PHIDP_PREPARSED_DATA) device->_preparsed,
 									 device->report, device->report_size);
@@ -619,71 +695,76 @@ int rhid_report_buttons(rhid_device_t* device, uint8_t report_id) {
 					 _rhid_hidp_err_to_str(ret));
 			return -1;
 		}
-	}
 
-	USAGE* usages_ordered = _rhid_win_gcache.usages_ordered;
-	memset(usages_ordered, 0, device->button_count * sizeof(USAGE));
+		memset(device->buttons, 0, device->button_count);
 
-	for(int i = 0; i < active_count; i++) {
-		if(usages_pages[i].UsagePage == HID_USAGE_PAGE_BUTTON) {
-			usages_ordered[usages_pages[i].Usage] = 1;
-		}
-	}
-
-	for(int i = 0; i < device->button_count; i++) {
-		if(usages_ordered[i] == 1) {
-			if(device->buttons[i] == RHID_BUTTON_OFF ||
-			   device->buttons[i] == RHID_BUTTON_RELEASED) {
-				device->buttons[i] = RHID_BUTTON_PRESSED;
-			}
-			else {
-				device->buttons[i] = RHID_BUTTON_HELD;
+		for(int j = 0; j < active_count; j++) {
+			for(int i = 0; i < device->button_count; i++) {
+				if(device->button_descriptors[i].page ==
+					   usages_pages[j].UsagePage &&
+				   device->button_descriptors[i].usage ==
+					   usages_pages[j].Usage) {
+					device->buttons[device->button_descriptors[i].index] = 1;
+					break;
+				}
 			}
 		}
-		else if(device->buttons[i] == RHID_BUTTON_HELD) {
-			device->buttons[i] = RHID_BUTTON_RELEASED;
+
+		/*uint8_t button_temp[MAX_BUTTON_COUNT] = {0};
+
+		// update temp buffer.
+		for(int j = 0; j < active_count; j++) {
+			for(int i = 0; i < device->button_count; i++) {
+				if(device->button_descriptors[i].page ==
+					   usages_pages[j].UsagePage &&
+				   device->button_descriptors[i].usage ==
+					   usages_pages[j].Usage) {
+					button_temp[device->button_descriptors[i].index] = 1;
+				}
+			}
 		}
-		else {
-			device->buttons[i] = RHID_BUTTON_OFF;
-		}
+
+		for(int i = 0; i < device->button_count; i++) {
+			switch(device->buttons[i]) {
+				case RHID_BUTTON_OFF:
+					device->buttons[i] =
+						button_temp[i] ? RHID_BUTTON_PRESSED : RHID_BUTTON_OFF;
+					break;
+
+				case RHID_BUTTON_HELD:
+					device->buttons[i] = button_temp[i] ? RHID_BUTTON_HELD
+														: RHID_BUTTON_RELEASED;
+					break;
+
+				case RHID_BUTTON_PRESSED:
+					device->buttons[i] = button_temp[i] ? RHID_BUTTON_HELD
+														: RHID_BUTTON_RELEASED;
+					break;
+
+				case RHID_BUTTON_RELEASED:
+					device->buttons[i] =
+						button_temp[i] ? RHID_BUTTON_PRESSED : RHID_BUTTON_OFF;
+					break;
+			}
+		}*/
 	}
 
-	DEBUG_TIME_STOP();
-
-	return 0;
-}
-
-int rhid_report_values(rhid_device_t* device, uint8_t report_id) {
-	if(device->handle == NULL || device->is_open == 0) {
-		RHID_ERR("can't get a report because the device isn't open");
-		return -1;
+	if(report_avaliable == 0) {
+		return 0;
 	}
 
-	// get raw data from the device.
-	DEBUG_TIME_START("rhid 'get raw value data from the device'");
-
-	device->report[0] = report_id;
-	if(HidD_GetInputReport(device->handle, device->report,
-						   (u_long) device->report_size) == FALSE) {
-		RHID_ERR_SYS("didn't receive a device report", GetLastError());
-		return -1;
-	}
-
+	// parse value data from report.
 	for(int i = 0; i < device->value_count; i++) {
-		{
-			ulong ret = HidP_GetUsageValue(
-				HidP_Input, device->value_pages[i], 0, device->value_usages[i],
-				(PULONG) &device->values[i], device->_preparsed, device->report,
-				device->report_size);
+		ulong ret = HidP_GetUsageValue(
+			HidP_Input, device->value_descriptors[i].page, 0,
+			device->value_descriptors[i].usage, (PULONG) &device->values[i],
+			device->_preparsed, device->report, device->report_size);
 
-			if(ret != HIDP_STATUS_SUCCESS) {
-				RHID_ERR("failed to parse value data from report error %s",
-						 _rhid_hidp_err_to_str(ret));
-			}
+		if(ret != HIDP_STATUS_SUCCESS) {
+			RHID_ERR("failed to parse value data from report error %s",
+					 _rhid_hidp_err_to_str(ret));
 		}
 	}
-
-	DEBUG_TIME_STOP();
 
 	return 0;
 }
@@ -707,10 +788,17 @@ int rhid_get_values_state(rhid_device_t* device, uint32_t* values, int size) {
 	return 0;
 }
 
-int rhid_get_button(rhid_device_t* device, int index) {
+int rhid_get_buttons_usage(rhid_device_t* device, uint16_t* usages, int size) {
+	// device->
+}
+
+int rhid_get_values_usage(rhid_device_t* device, uint16_t* usages, int size) {
+}
+
+int rhid_get_button(rhid_device_t* device, uint16_t usage) {
 	return 0;
 }
-int rhid_get_value(rhid_device_t* device, int index) {
+int rhid_get_value(rhid_device_t* device, uint16_t usage) {
 	return 0;
 }
 

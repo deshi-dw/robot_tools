@@ -62,6 +62,97 @@ LIBINPT int inpt_stop() {
 	return 0;
 }
 
+// TODO move nanosleep function somewhere else (ideally it's own c file)
+#ifdef WINDOWS
+// Code from https://github.com/coreutils/gnulib/blob/master/lib/nanosleep.c
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+/* The Windows API function Sleep() has a resolution of about 15 ms and takes
+   at least 5 ms to execute.  We use this function for longer time periods.
+   Additionally, we use busy-looping over short time periods, to get a
+   resolution of about 0.01 ms.  In order to measure such short timespans,
+   we use the QueryPerformanceCounter() function.  */
+
+enum { BILLION = 1000 * 1000 * 1000 };
+
+int nanosleep(const struct timespec* requested_delay,
+			  struct timespec*		 remaining_delay) {
+	static int initialized;
+	/* Number of performance counter increments per nanosecond,
+	   or zero if it could not be determined.  */
+	static double ticks_per_nanosecond;
+
+	if(requested_delay->tv_nsec < 0 || BILLION <= requested_delay->tv_nsec) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	/* For requested delays of one second or more, 15ms resolution is
+	   sufficient.  */
+	if(requested_delay->tv_sec == 0) {
+		if(! initialized) {
+			/* Initialize ticks_per_nanosecond.  */
+			LARGE_INTEGER ticks_per_second;
+
+			if(QueryPerformanceFrequency(&ticks_per_second))
+				ticks_per_nanosecond =
+					(double) ticks_per_second.QuadPart / 1000000000.0;
+
+			initialized = 1;
+		}
+		if(ticks_per_nanosecond) {
+			/* QueryPerformanceFrequency worked.  We can use
+			   QueryPerformanceCounter.  Use a combination of Sleep and
+			   busy-looping.  */
+			/* Number of milliseconds to pass to the Sleep function.
+			   Since Sleep can take up to 8 ms less or 8 ms more than requested
+			   (or maybe more if the system is loaded), we subtract 10 ms.  */
+			int sleep_millis = (int) requested_delay->tv_nsec / 1000000 - 10;
+			/* Determine how many ticks to delay.  */
+			LONGLONG wait_ticks =
+				requested_delay->tv_nsec * ticks_per_nanosecond;
+			/* Start.  */
+			LARGE_INTEGER counter_before;
+			if(QueryPerformanceCounter(&counter_before)) {
+				/* Wait until the performance counter has reached this value.
+				   We don't need to worry about overflow, because the
+				   performance counter is reset at reboot, and with a frequency
+				   of 3.6E6 ticks per second 63 bits suffice for over 80000
+				   years.  */
+				LONGLONG wait_until = counter_before.QuadPart + wait_ticks;
+				/* Use Sleep for the longest part.  */
+				if(sleep_millis > 0)
+					Sleep(sleep_millis);
+				/* Busy-loop for the rest.  */
+				for(;;) {
+					LARGE_INTEGER counter_after;
+					if(! QueryPerformanceCounter(&counter_after))
+						/* QueryPerformanceCounter failed, but succeeded
+						   earlier. Should not happen.  */
+						break;
+					if(counter_after.QuadPart >= wait_until)
+						/* The requested time has elapsed.  */
+						break;
+				}
+				goto done;
+			}
+		}
+	}
+	/* Implementation for long delays and as fallback.  */
+	Sleep(requested_delay->tv_sec * 1000 + requested_delay->tv_nsec / 1000000);
+
+done:
+	/* Sleep is not interruptible.  So there is no remaining delay.  */
+	if(remaining_delay != NULL) {
+		remaining_delay->tv_sec	 = 0;
+		remaining_delay->tv_nsec = 0;
+	}
+	return 0;
+}
+#endif
+
 LIBINPT int inpt_update() {
 	// Update device list.
 	// TODO Since this might be expensive, consider doing ever x number of
@@ -84,15 +175,8 @@ LIBINPT int inpt_update() {
 		//		is rhid's incapability to do disconnection detection... so...
 		// implement that please.
 
-		// FIXME Calling rhid_get_devices causes massive slowdown every so often
-		// (I THINK). Probably do
-		//		 to accessing various database-like structures in order to
-		// generate all the info needed. 		 None-the-less, move
-		// rhid_get_devices out of the update cycle, don't just reduce the
-		// amount of times it is called because even if it is only called a
-		// couple of times, it could 		 still freeze the update cycle. This
-		// goes
-		// back to needing a proper way to detect when a 		 is removed.
+		// TODO create a dedicated function to get connected devices and only
+		// call it when the currently connected device is disconnected.
 
 		// TEMP FIX:
 		rhid_device_t tmp_devs[MAX_DEV_COUNT];
@@ -112,13 +196,7 @@ LIBINPT int inpt_update() {
 	if(inpt.dev_selected != NULL) {
 		DEBUG_TIME_START("updating HID values");
 		DEBUG_TIME_START("HID report");
-		rhid_report_buttons(inpt.dev_selected, 0);
-		// FIXME If there is not a slight delay here, the application will
-		// 		 freeze up for 5 seconds, seemingly with no decernable reason.
-		//		 this only happens on the laptop. Investigation required.
-
-		// struct timespec delay = {0, ( 1 * 1000 )}; nanosleep(&delay, NULL);
-		rhid_report_values(inpt.dev_selected, 0);
+		rhid_report(inpt.dev_selected, 0);
 		DEBUG_TIME_STOP();
 
 		DEBUG_TIME_START("state copy");
@@ -128,18 +206,27 @@ LIBINPT int inpt_update() {
 							  inpt.hid.val_count);
 		DEBUG_TIME_STOP();
 		for(int i = 0; i < inpt.hid.btn_count; i++) {
-			if(inpt.hid.btns[i] == inpt.hid_prev.btns[i]) {
+			enum inpt_btn_state_t new_state =
+				inpt.hid.btns[i] == 1 && inpt.hid_prev.btns[i] == 0
+					? INPT_BTN_PRESSED
+				: inpt.hid.btns[i] == 1 && inpt.hid_prev.btns[i] == 1
+					? INPT_BTN_HELD
+				: inpt.hid.btns[i] == 0 && inpt.hid_prev.btns[i] == 1
+					? INPT_BTN_RELEASED
+					: 0;
+
+			if(new_state == inpt.btn_states[i]) {
 				continue;
 			}
 
-			// TODO Do on button update / change / trigger or whatever.
+			inpt.btn_states[i] = new_state;
 
 			for(int j = 0; j < MAX_HID_BTN_EVENTS; j++) {
 				if(inpt.on_hid_btns[j] == NULL) {
 					continue;
 				}
 
-				inpt.on_hid_btns[j](i, inpt.hid.btns[i]);
+				inpt.on_hid_btns[j](i, inpt.btn_states[i]);
 			}
 		}
 
@@ -148,7 +235,6 @@ LIBINPT int inpt_update() {
 				continue;
 			}
 
-			// TODO Do on value update.
 			for(int j = 0; j < MAX_HID_VAL_EVENTS; j++) {
 				if(inpt.on_hid_vals[j] == NULL) {
 					continue;
@@ -158,7 +244,6 @@ LIBINPT int inpt_update() {
 			}
 		}
 
-		memcpy(&inpt.hid_prev, &inpt.hid, sizeof(inpt_hid_t));
 		DEBUG_TIME_STOP();
 	}
 
@@ -166,24 +251,29 @@ LIBINPT int inpt_update() {
 	DEBUG_TIME_START("updating actions");
 
 	for(int i = 0; i < ACTION_COUNT; i++) {
-		inpt_act_t* action = inpt.actions[i];
+		const inpt_act_t* action = &inpt.actions[i];
 
 		// Check to see if the action can run in the current state.
 		if(action == NULL || ! (BITFLD_GET(action->states, inpt.state_index))) {
 			continue;
 		}
 
-		// TODO Refactor.
-
 		// Don't proccess actions that have an input mod but it isn't
 		// pressed.
-		if(action->input_mod != -1 && inpt.hid.btns[action->input_mod] == 0) {
+		if(action->input_mod != -1 &&
+		   inpt.btn_states[action->input_mod] != INPT_BTN_HELD) {
 			continue;
 		}
 
 		switch(action->type) {
-			case 0: // STATE CHANGE
-				if(inpt.hid.btns[action->input] != 1) {
+			case INPT_ACT_STATE_CHANGE: // STATE CHANGE
+				if((inpt.btn_states[action->input] & action->flags) == 0) {
+					break;
+				}
+
+				// Don't update the state if the button value hasn't changed.
+				if(inpt.btn_states[action->input] ==
+				   inpt.btn_states_prev[action->input]) {
 					break;
 				}
 
@@ -193,30 +283,86 @@ LIBINPT int inpt_update() {
 						continue;
 					}
 
+					printf("state changed %ld -> %ld\n",
+						   inpt.states[inpt.state_index], inpt.states[i]);
+
+					for(int j = 0; j < MAX_ACT_STATE_CHANGE_EVENTS; j++) {
+						if(inpt.on_act_state_changes[j] == NULL) {
+							continue;
+						}
+
+						inpt.on_act_state_changes[j](
+							inpt.states[inpt.state_index], action->new_state);
+					}
+
 					// TODO I doubt this is nessesary but it would probably
 					// be more correct to queue the change in state so other
 					// actions in the array aren't affected
 					// until next cycle.
 					inpt.state_index = i;
+
 					break;
 				}
 
 				break;
 
-			case 1: // TRIGGER
-				if(inpt.hid.btns[action->input] != 1) {
+			case INPT_ACT_TRIGGER: // TRIGGER
+								   // TODO add action->input_mod
+				if((inpt.btn_states[action->input] & action->flags) == 0) {
 					break;
 				}
 
-				// TODO Call the trigger action.
+				// Don't update the action if the button value hasn't changed.
+				if(inpt.btn_states[action->input] != INPT_BTN_HELD &&
+				   inpt.btn_states[action->input] ==
+					   inpt.btn_states_prev[action->input]) {
+					break;
+				}
+
+				printf("triggered action %s\n", action->name);
+
+				for(int j = 0; j < MAX_ACT_TRIGGER_EVENTS; j++) {
+					if(inpt.on_act_triggers[j].event == NULL) {
+						continue;
+					}
+
+					inpt.on_act_triggers[j].event(
+						inpt.btn_states[action->input]);
+				}
 				break;
 
-			case 2: // VALUE
-				// TODO Call the value.
+			case INPT_ACT_VALUE: // VALUE
+				// Don't update the action if the value's value hasn't changed.
+				if(inpt.hid.vals[action->input] ==
+				   inpt.hid_prev.vals[action->input]) {
+					break;
+				}
+
+				printf("value action %s set to %d\n", action->name,
+					   inpt.hid.vals[action->input]);
+
+				for(int j = 0; j < MAX_ACT_VALUE_EVENTS; j++) {
+					if(inpt.on_act_values[j].event == NULL) {
+						continue;
+					}
+
+					inpt.on_act_values[j].event(inpt.hid.vals[action->input]);
+				}
 				break;
+
+			default:
+				fprintf(stderr,
+						"inpt tried to call action '%s' but the action didn't "
+						"have a type.\n",
+						action->name);
 		}
 	}
 	DEBUG_TIME_STOP();
+
+	// copy current hid data over to the previous hid data in preperation for
+	// the next cycle.
+	memcpy(&inpt.hid_prev, &inpt.hid, sizeof(inpt_hid_t));
+	memcpy(&inpt.btn_states_prev, &inpt.btn_states, sizeof(inpt.btn_states));
 
 	return 0;
 }
@@ -264,23 +410,100 @@ LIBINPT int inpt_state_set(char* state, char* new_state) {
 	return -1;
 }
 
-LIBINPT int inpt_act_add(inpt_act_t* action, char* name) {
+LIBINPT inpt_act_t* inpt_act_new_state_change(char* name, char** states,
+											  int state_count, int input_mod,
+											  int input, char* newstate,
+											  int flags) {
 	for(int i = 0; i < ACTION_COUNT; i++) {
-		if(inpt.actions[i] == 0) {
-			action->name	  = name;
-			action->name_hash = inpt_hash(name);
-			inpt.actions[i]	  = action;
-			return 0;
+		if(inpt.actions[i].name == NULL) {
+			// set name.
+			inpt_act_set_name(&inpt.actions[i], name);
+			inpt_act_set_type(&inpt.actions[i], INPT_ACT_STATE_CHANGE);
+
+			// add states.
+			for(int j = 0; j < state_count; j++) {
+				inpt_act_add_state(&inpt.actions[i], states[j]);
+			}
+
+			// set input mod and input.
+			inpt_act_set_input_mod(&inpt.actions[i], input_mod);
+			inpt_act_set_input(&inpt.actions[i], input);
+
+			// set state change state.
+			// TODO add function to set new_state.
+			inpt.actions[i].new_state = inpt_hash(newstate);
+
+			// set input flags.
+			inpt_act_set_flags(&inpt.actions[i], flags);
+
+			return &inpt.actions[i];
 		}
 	}
 
-	return -1;
+	return NULL;
 }
 
-LIBINPT int inpt_act_del(inpt_act_t* action) {
+LIBINPT inpt_act_t* inpt_act_new_trigger(char* name, char** states,
+										 int state_count, int input_mod,
+										 int input, int flags) {
 	for(int i = 0; i < ACTION_COUNT; i++) {
-		if(inpt.actions[i] == action) {
-			inpt.actions[i] = NULL;
+		if(inpt.actions[i].name == NULL) {
+			// set name.
+			inpt_act_set_name(&inpt.actions[i], name);
+			inpt_act_set_type(&inpt.actions[i], INPT_ACT_TRIGGER);
+
+			// add states.
+			for(int j = 0; j < state_count; j++) {
+				inpt_act_add_state(&inpt.actions[i], states[j]);
+			}
+
+			// set input mod and input.
+			inpt_act_set_input_mod(&inpt.actions[i], input_mod);
+			inpt_act_set_input(&inpt.actions[i], input);
+
+			// set input flags.
+			inpt_act_set_flags(&inpt.actions[i], flags);
+
+			return &inpt.actions[i];
+		}
+	}
+
+	return NULL;
+}
+
+LIBINPT inpt_act_t* inpt_act_new_value(char* name, char** states,
+									   int state_count, int input_mod,
+									   int input, int flags) {
+	for(int i = 0; i < ACTION_COUNT; i++) {
+		if(inpt.actions[i].name == NULL) {
+			// set name.
+			inpt_act_set_name(&inpt.actions[i], name);
+			inpt_act_set_type(&inpt.actions[i], INPT_ACT_VALUE);
+
+			// add states.
+			for(int j = 0; j < state_count; j++) {
+				inpt_act_add_state(&inpt.actions[i], states[j]);
+			}
+
+			// set input mod and input.
+			inpt_act_set_input_mod(&inpt.actions[i], input_mod);
+			inpt_act_set_input(&inpt.actions[i], input);
+
+			// set input flags.
+			inpt_act_set_flags(&inpt.actions[i], flags);
+
+			return &inpt.actions[i];
+		}
+	}
+
+	return NULL;
+}
+
+LIBINPT int inpt_act_del(char* name) {
+	long hash = inpt_hash(name);
+	for(int i = 0; i < ACTION_COUNT; i++) {
+		if(inpt.actions[i].name_hash == hash) {
+			memset(&inpt.actions[i], 0, sizeof(inpt_act_t));
 			return 0;
 		}
 	}
@@ -292,8 +515,8 @@ inpt_act_t* inpt_act_get(char* name) {
 	unsigned long hash = inpt_hash(name);
 
 	for(int i = 0; i < ACTION_COUNT; i++) {
-		if(inpt.actions[i]->name_hash == hash) {
-			return inpt.actions[i];
+		if(inpt.actions[i].name_hash == hash) {
+			return &inpt.actions[i];
 		}
 	}
 
@@ -422,13 +645,6 @@ LIBINPT int inpt_act_add_state(inpt_act_t* action, char* state) {
 	}
 
 	for(int i = 0; i < STATE_COUNT; i++) {
-		// if(action->states[i] != 0) {
-		//     continue;
-		// }
-
-		// action->states[i] = hash;
-		// return 0;
-
 		if(inpt.states[i] != hash) {
 			continue;
 		}
@@ -473,39 +689,45 @@ LIBINPT int inpt_act_del_state(inpt_act_t* action, char* state) {
 }
 
 // TODO Listeners are difficult so I empore you to do them later.
-LIBINPT int inpt_act_on_state_change(inpt_act_t* action,
-									 void (*event)(char* current_state,
-												   char* new_state)) {
-	return 0;
-}
-LIBINPT int inpt_act_on_trigger(inpt_act_t* action, void (*event)()) {
-	return 0;
-}
-LIBINPT int inpt_act_on_value(inpt_act_t* action, void (*event)(int amount)) {
-	return 0;
-}
+LIBINPT int inpt_act_on_state_change(inpt_act_t*				  action,
+									 inpt_act_state_change_evnt_t event) {
+	for(int i = 0; i < MAX_ACT_STATE_CHANGE_EVENTS; i++) {
+		if(inpt.on_act_state_changes[i] != NULL) {
+			continue;
+		}
 
-// TODO Copy rhid_win.c and rhid.h from the big computer to the little computer
-// so I can implement these functions.
-LIBINPT int inpt_hid_count() {
-	return inpt.dev_count;
+		inpt.on_act_state_changes[i] = event;
+	}
+	return 0;
 }
-LIBINPT char** inpt_hid_list() {
-	// FIXME This will return a list of null pointers if inpt_update hasn't been
-	// called yet.
-	return (char**) inpt.dev_names;
-}
+LIBINPT int inpt_act_on_trigger(inpt_act_t*				action,
+								inpt_act_trigger_evnt_t event) {
+	for(int i = 0; i < MAX_ACT_TRIGGER_EVENTS; i++) {
+		if(inpt.on_act_triggers[i].event != NULL) {
+			continue;
+		}
 
-LIBINPT int inpt_hid_select(int index) {
-	if(index >= inpt.dev_count) {
-		return -1;
+		inpt.on_act_triggers[i].event  = event;
+		inpt.on_act_triggers[i].action = action;
 	}
 
-	if(inpt.dev_selected != NULL) {
-		rhid_close(inpt.dev_selected);
+	return 0;
+}
+LIBINPT int inpt_act_on_value(inpt_act_t* action, inpt_act_value_evnt_t event) {
+	for(int i = 0; i < MAX_ACT_VALUE_EVENTS; i++) {
+		if(inpt.on_act_values[i].event != NULL) {
+			continue;
+		}
+
+		inpt.on_act_values[i].event	 = event;
+		inpt.on_act_values[i].action = action;
 	}
 
-	inpt.dev_selected = &inpt.devs[index];
+	return 0;
+}
+
+static int inpt_hid_open_and_select(rhid_device_t* device) {
+	inpt.dev_selected = device;
 	if(rhid_open(inpt.dev_selected) < 0) {
 		return -1;
 	}
@@ -519,12 +741,85 @@ LIBINPT int inpt_hid_select(int index) {
 	return 0;
 }
 
-LIBINPT int inpt_hid_is_conn() {
-	// TODO Find a better way to do connection check. This is prone to fail if
-	//		the device list isn't updated every time inpt_update is called.
-	//		(which it shouldn't be.)
+static int inpt_hid_update_connected() {
+	int vid = 0;
+	int pid = 0;
+	if(inpt.dev_selected != NULL) {
+		vid = inpt.dev_selected->vendor_id;
+		pid = inpt.dev_selected->product_id;
+		rhid_close(inpt.dev_selected);
+	}
+
+	inpt.dev_count = rhid_get_device_count();
+	if(inpt.dev_count >= MAX_DEV_COUNT) {
+		inpt.dev_count = MAX_DEV_COUNT;
+	}
+
 	for(int i = 0; i < inpt.dev_count; i++) {
-		if(&inpt.devs[i] == inpt.dev_selected) {
+		if(rhid_get_vendor_id(&inpt.devs[i]) == vid &&
+		   rhid_get_product_id(&inpt.devs[i]) == pid) {
+			inpt_hid_open_and_select(&inpt.devs[i]);
+
+			break;
+		}
+
+		inpt.dev_names[i]	= rhid_get_product_name(&inpt.devs[i]);
+		inpt.dev_ids[i].vid = rhid_get_vendor_id(&inpt.devs[i]);
+		inpt.dev_ids[i].vid = rhid_get_product_id(&inpt.devs[i]);
+	}
+
+	return 0;
+}
+
+LIBINPT int inpt_hid_count() {
+	int real_count = rhid_get_device_count();
+	return real_count >= MAX_DEV_COUNT ? MAX_DEV_COUNT : real_count;
+}
+
+LIBINPT inpt_hid_id_t* inpt_hid_list() {
+	inpt_hid_update_connected();
+
+	if(inpt.dev_names[0] == NULL) {
+		return NULL;
+	}
+
+	return (inpt_hid_id_t*) inpt.dev_ids;
+}
+
+LIBINPT char** inpt_hid_list_names() {
+	inpt_hid_update_connected();
+
+	if(inpt.dev_names[0] == NULL) {
+		return NULL;
+	}
+
+	return (char**) inpt.dev_names;
+}
+
+LIBINPT int inpt_hid_select(int vid, int pid) {
+	if(inpt.dev_selected != NULL) {
+		rhid_close(inpt.dev_selected);
+		inpt.dev_selected = NULL;
+	}
+
+	for(int i = 0; i < inpt.dev_count; i++) {
+		if(rhid_get_vendor_id(&inpt.devs[i]) == vid &&
+		   rhid_get_product_id(&inpt.devs[i]) == pid) {
+			break;
+		}
+
+		inpt_hid_open_and_select(&inpt.devs[i]);
+		return 0;
+	}
+
+	return -1;
+}
+
+LIBINPT int inpt_hid_is_conn() {
+	// TODO Find a better way to do connection check.
+	for(int i = 0; i < inpt.dev_count; i++) {
+		if(inpt.devs[i].product_id == inpt.dev_selected->product_id &&
+		   inpt.devs[i].vendor_id == inpt.dev_selected->vendor_id) {
 			return 1;
 		}
 	}
