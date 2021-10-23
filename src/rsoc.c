@@ -31,7 +31,7 @@
 #endif
 
 #define RSOC_ERR(message) fprintf(stderr, message);
-#define RSOC_ERR_SOCK(message, sockerr)                   \
+#define RSOC_ERR_SOCK(message, sockerr)                  \
 	{                                                    \
 		char errmsg[256];                                \
 		strerror_s(errmsg, sizeof(errmsg), sockerr);     \
@@ -54,7 +54,7 @@ int rsoc_init() {
 // FIXME function doesn't work with TCP. See
 // https://linux.die.net/man/2/accept
 static int _rsoc_conn(char* addr, const int addr_size, const int port,
-					 rsoc_socket_t* sock, int role) {
+					  rsoc_socket_t* sock, int role) {
 	if(sock == NULL) {
 		return RSOC_ERR_RESOLV_NULSOCK;
 	}
@@ -159,7 +159,7 @@ int rsoc_resolve_mdns(char* addr, const int addr_size, rsoc_socket_t* socket) {
 }
 
 int rsoc_resolve_ip(char* addr, const int addr_size, const int port,
-				   rsoc_socket_t* sock) {
+					rsoc_socket_t* sock) {
 	int ret = _rsoc_conn(addr, addr_size, port, sock, RSOC_ROLE_CLIENT);
 	if(ret < 0) {
 		return ret;
@@ -180,10 +180,9 @@ int rsoc_host(const int port, rsoc_socket_t* sock) {
 }
 
 int rsoc_host_mdns(char* addr, const int addr_size, const int port,
-				  rsoc_socket_t* sock) {
+				   rsoc_socket_t* sock) {
 	return -1;
 }
-
 
 // GENERIC FUNCTIONS
 
@@ -217,7 +216,8 @@ int rsoc_send(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
 	return send_size;
 }
 
-int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
+static int rsoc_receivefrom(rsoc_socket_t* sock, uint8_t* data,
+							const int data_size, int flags) {
 	if(sock->role == RSOC_ROLE_NONE) {
 		return -1;
 	}
@@ -228,7 +228,7 @@ int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
 		struct sockaddr_storage addr	  = {0};
 		int						addr_size = sizeof(struct sockaddr_storage);
 
-		recv_size = recvfrom(sock->fd, (char*) data, data_size, 0,
+		recv_size = recvfrom(sock->fd, (char*) data, data_size, flags,
 							 (struct sockaddr*) &addr, (socklen_t*) &addr_size);
 		// recv_size = recvfrom(sock->fd, data, data_size, 0, NULL, NULL);
 
@@ -254,7 +254,7 @@ int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
 	}
 	else if(sock->role == RSOC_ROLE_CLIENT) {
 		// receive data from whatever host we're connected to.
-		recv_size = recv(sock->fd, (char*) data, data_size, 0);
+		recv_size = recv(sock->fd, (char*) data, data_size, flags);
 
 		if(recv_size <= 0) {
 			RSOC_ERR_SOCK(
@@ -265,6 +265,14 @@ int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
 	}
 
 	return recv_size;
+}
+
+int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
+	return rsoc_receivefrom(sock, data, data_size, 0);
+}
+
+int rsoc_peek(rsoc_socket_t* sock, uint8_t* data, const int data_size) {
+	return rsoc_receivefrom(sock, data, data_size, MSG_PEEK);
 }
 
 int rsoc_close(rsoc_socket_t* sock) {

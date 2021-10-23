@@ -52,7 +52,7 @@ enum rsoc_soctype_t {
 	RSOC_SOCK_SEQPACKET = SOCK_SEQPACKET,
 };
 
-enum RSOC_PROTOCOL {
+enum rsoc_protocol_t {
 	// Dummy protocol for TCP.
 	RSOC_IPPROTO_IP = IPPROTO_IP,
 	// Internet Control Message Protocol.
@@ -101,10 +101,10 @@ enum RSOC_ADDRINFO_FLAGS {
 	RSOC_AI_NUMERICSERV = AI_NUMERICSERV
 };
 
-enum RSOC_ROLE { RSOC_ROLE_NONE, RSOC_ROLE_HOST, RSOC_ROLE_CLIENT };
+enum rsoc_role_t { RSOC_ROLE_NONE, RSOC_ROLE_HOST, RSOC_ROLE_CLIENT };
 
 // Resolve errors.
-enum RSOC_ERR_RESOLV {
+enum rsoc_err_resolve_t {
 	// NULL sock argument provided.
 	RSOC_ERR_RESOLV_NULSOCK = -255,
 	// Failed to get the address info.
@@ -116,7 +116,7 @@ enum RSOC_ERR_RESOLV {
 };
 
 // Hosting errors.
-enum RSOC_ERR_HOST {
+enum rsoc_error_host_t {
 	// NULL sock argument provided.
 	RSOC_ERR_HOST_NULSOCK = -255,
 	// Failed to get the address info.
@@ -139,9 +139,9 @@ struct rsoc_socket_t {
 	} addr;
 	int addr_size;
 
-	int family;
-	int type;
-	int protocol;
+	enum rsoc_family_t family;
+	enum rsoc_soctype_t type;
+	enum rsoc_protocol_t protocol;
 	int role;
 
 	int fd;
@@ -171,6 +171,7 @@ int rsoc_host_mdns(char* addr, const int addr_size, const int port,
 
 int rsoc_send(rsoc_socket_t* sock, uint8_t* data, const int data_size);
 int rsoc_receive(rsoc_socket_t* sock, uint8_t* data, const int data_size);
+int rsoc_peek(rsoc_socket_t* sock, uint8_t* data, const int data_size);
 
 int rsoc_close(rsoc_socket_t* sock);
 
